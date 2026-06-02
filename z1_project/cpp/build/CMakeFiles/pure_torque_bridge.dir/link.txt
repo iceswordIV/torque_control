@@ -1,0 +1,1 @@
+/usr/bin/c++     CMakeFiles/pure_torque_bridge.dir/pure_torque_bridge.cpp.o  -o pure_torque_bridge  -Wl,-rpath,/home/icesword/Desktop/torque_control/z1_sdk/lib /home/icesword/Desktop/torque_control/z1_sdk/lib/libZ1_SDK_x86_64.so -lpthread 

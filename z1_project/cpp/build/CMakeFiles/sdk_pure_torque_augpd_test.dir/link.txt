@@ -1,0 +1,1 @@
+/usr/bin/c++     CMakeFiles/sdk_pure_torque_augpd_test.dir/sdk_pure_torque_augpd_test.cpp.o  -o sdk_pure_torque_augpd_test  -Wl,-rpath,/home/icesword/Desktop/torque_control/z1_sdk/lib /home/icesword/Desktop/torque_control/z1_sdk/lib/libZ1_SDK_x86_64.so -lpthread 
