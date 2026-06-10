@@ -29,7 +29,12 @@ DEFAULT_RETURN_KP = "20 20 40 8 5 5"
 DEFAULT_RETURN_KD = "3 3 6 1 0.6 0.4"
 DEFAULT_KI = "0 0 0 0 0 0"
 DEFAULT_INTEGRAL_LIMIT = "0.8 0.8 0.8 0.8 0.8 0.8"
-PID_CONTROLLER_MODES = {"augmented_pid_friction_model", "computed_pid_model", "computed_pid_friction_model"}
+PID_CONTROLLER_MODES = {
+    "augmented_pid_friction_model",
+    "computed_pid_model",
+    "computed_pid_friction_model",
+    "computed_pid_torque_integral_friction_model",
+}
 TEST_CONTROLLER_CHOICES = [
     "none",
     "gravity_only",
@@ -40,6 +45,7 @@ TEST_CONTROLLER_CHOICES = [
     "augmented_pid_friction_model",
     "computed_pid_model",
     "computed_pid_friction_model",
+    "computed_pid_torque_integral_friction_model",
     "gazebo_friction_model",
     "feedforward_friction_model",
 ]
@@ -139,6 +145,12 @@ def trajectory_phase_name(args, elapsed: float) -> str:
     if elapsed <= args.move_time:
         return "outbound"
     return "goal_hold"
+
+
+def integral_task_name(trajectory_phase: str) -> str:
+    if trajectory_phase in ("return", "return_hold"):
+        return "return"
+    return "outbound"
 
 
 def write_header(writer: csv.writer) -> None:
@@ -326,6 +338,7 @@ def main() -> int:
     compute_augmented_pid_friction_model_components = None
     compute_computed_pid_model_components = None
     compute_computed_pid_friction_model_components = None
+    compute_computed_pid_torque_integral_friction_model_components = None
     active_controller_modes = {args.test_controller}
     if args.return_to_start or args.return_home:
         active_controller_modes.add(args.return_controller)
@@ -339,6 +352,8 @@ def main() -> int:
         from test_controller import compute_computed_pid_model_components
     if "computed_pid_friction_model" in active_controller_modes:
         from test_controller import compute_computed_pid_friction_model_components
+    if "computed_pid_torque_integral_friction_model" in active_controller_modes:
+        from test_controller import compute_computed_pid_torque_integral_friction_model_components
     if tau_fb_limit is not None and "augmented_pd" not in active_controller_modes:
         raise ValueError("--tau-fb-limit only applies when augmented_pd is an active controller")
 
@@ -396,6 +411,24 @@ def main() -> int:
             )
         elif controller_mode == "computed_pid_friction_model":
             tau_i, tau = compute_computed_pid_friction_model_components(
+                q_actual,
+                dq_actual,
+                q_des,
+                dq_des,
+                ddq_des,
+                e_int=e_int,
+                kp=phase_kp,
+                kd=phase_kd,
+                ki=ki,
+                model_damping=model_damping,
+                model_friction=model_friction,
+                friction_deadband=args.friction_deadband,
+                dynamics_mode=args.dynamics_mode,
+                finite_diff_step=args.finite_diff_step,
+                finite_diff_method=args.finite_diff_method,
+            )
+        elif controller_mode == "computed_pid_torque_integral_friction_model":
+            tau_i, tau = compute_computed_pid_torque_integral_friction_model_components(
                 q_actual,
                 dq_actual,
                 q_des,
@@ -492,7 +525,7 @@ def main() -> int:
     frozen_feedback_since = None
     run_start = None
     e_int = np.zeros(NDOF, dtype=float)
-    last_trajectory_phase = None
+    last_integral_task = None
 
     try:
         with open(args.csv_log, "w", newline="") as f:
@@ -513,9 +546,10 @@ def main() -> int:
                 )
                 q_des, dq_des, ddq_des = desired_trajectory(args, trajectory_fn, q_start, q_goal, q_return, elapsed)
                 trajectory_phase = trajectory_phase_name(args, elapsed)
-                if trajectory_phase != last_trajectory_phase:
+                integral_task = integral_task_name(trajectory_phase)
+                if integral_task != last_integral_task:
                     e_int[:] = 0.0
-                    last_trajectory_phase = trajectory_phase
+                    last_integral_task = integral_task
                 in_return_phase = trajectory_phase in ("return", "return_hold")
                 phase = "return" if in_return_phase else "outbound"
                 if in_return_phase:

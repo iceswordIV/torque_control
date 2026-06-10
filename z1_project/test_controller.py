@@ -28,6 +28,7 @@ TEST_CONTROLLER_MODES = (
     "augmented_pid_friction_model",
     "computed_pid_model",
     "computed_pid_friction_model",
+    "computed_pid_torque_integral_friction_model",
     "gazebo_friction_model",
     "feedforward_friction_model",
 )
@@ -170,6 +171,26 @@ def compute_test_tau(
             kp=kp,
             kd=kd,
             ki=ki,
+            dynamics_mode=dynamics_mode,
+            finite_diff_step=finite_diff_step,
+            finite_diff_method=finite_diff_method,
+        )
+        return tau
+
+    if mode == "computed_pid_torque_integral_friction_model":
+        _, tau = compute_computed_pid_torque_integral_friction_model_components(
+            q,
+            dq,
+            q_des,
+            dq_des,
+            ddq_des,
+            e_int=e_int,
+            kp=kp,
+            kd=kd,
+            ki=ki,
+            model_damping=model_damping,
+            model_friction=model_friction,
+            friction_deadband=friction_deadband,
             dynamics_mode=dynamics_mode,
             finite_diff_step=finite_diff_step,
             finite_diff_method=finite_diff_method,
@@ -477,6 +498,56 @@ def compute_computed_pid_friction_model_components(
         friction_deadband=friction_deadband,
     )
     tau = tau_model + tau_damping + tau_friction
+    return tau_i, tau
+
+
+def compute_computed_pid_torque_integral_friction_model_components(
+    q,
+    dq,
+    q_des,
+    dq_des,
+    ddq_des,
+    e_int=None,
+    kp=None,
+    kd=None,
+    ki=None,
+    model_damping=None,
+    model_friction=None,
+    friction_deadband: float = DEFAULT_FRICTION_DEADBAND,
+    dynamics_mode: str = "analytic",
+    finite_diff_step: float = 1e-5,
+    finite_diff_method: str = "central",
+) -> tuple[np.ndarray, np.ndarray]:
+    q = _vec6(q, "q")
+    dq = _vec6(dq, "dq")
+    q_des = _vec6(q_des, "q_des")
+    dq_des = _vec6(dq_des, "dq_des")
+    if ddq_des is None:
+        raise ValueError("ddq_des is required for computed_pid_torque_integral_friction_model test controller")
+    ddq_des = _vec6(ddq_des, "ddq_des")
+    e_int = np.zeros(NDOF, dtype=float) if e_int is None else _vec6(e_int, "e_int")
+    Kp, Kd, Ki = _resolve_pid_gains(kp=kp, kd=kd, ki=ki)
+
+    e = q_des - q
+    de = dq_des - dq
+    ddq_cmd = ddq_des + Kd @ de + Kp @ e
+    M, C, N, _ = _dynamics_for_mode(
+        q,
+        dq,
+        mode=dynamics_mode,
+        finite_diff_step=finite_diff_step,
+        finite_diff_method=finite_diff_method,
+    )
+    tau_model = M @ ddq_cmd + C @ dq + N
+    tau_i = Ki @ e_int
+    tau_damping, tau_friction = _gazebo_friction_terms(
+        e,
+        dq_des,
+        model_damping=model_damping,
+        model_friction=model_friction,
+        friction_deadband=friction_deadband,
+    )
+    tau = tau_model + tau_i + tau_damping + tau_friction
     return tau_i, tau
 
 
