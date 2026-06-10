@@ -37,6 +37,22 @@ Build the compiled analytic dynamics module after editing `z1_analytic_dynamics_
 python3 setup_fast_dynamics.py build_ext --inplace
 ```
 
+## Fast dynamics and gravity validation
+
+Use these commands to build the compiled dynamics module, compare compiled and
+pure-Python timing, and validate gravity against finite-difference potential
+energy plus the body-Jacobian virtual-work formula:
+
+```bash
+cd ~/Desktop/torque_control/z1_project
+python3 -m pip install cython numpy setuptools
+python3 setup_fast_dynamics.py build_ext --inplace
+python3 benchmark_fast_dynamics.py
+Z1_DISABLE_FAST_DYNAMICS=1 python3 benchmark_fast_dynamics.py
+python3 validate_gravity_pdf_method.py
+python3 -m py_compile torque_main.py test_controller.py controller.py z1_analytic_dynamics.py benchmark_fast_dynamics.py validate_gravity_pdf_method.py
+```
+
 `move_time = 6 s` means 3000 loop steps at 500 Hz.
 
 `hold_time` holds `q_goal` after the outbound move and before any return phase.

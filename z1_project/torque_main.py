@@ -29,7 +29,7 @@ DEFAULT_RETURN_KP = "20 20 40 8 5 5"
 DEFAULT_RETURN_KD = "3 3 6 1 0.6 0.4"
 DEFAULT_KI = "0 0 0 0 0 0"
 DEFAULT_INTEGRAL_LIMIT = "0.8 0.8 0.8 0.8 0.8 0.8"
-PID_CONTROLLER_MODES = {"augmented_pid_friction_model", "computed_pid_friction_model"}
+PID_CONTROLLER_MODES = {"augmented_pid_friction_model", "computed_pid_model", "computed_pid_friction_model"}
 TEST_CONTROLLER_CHOICES = [
     "none",
     "gravity_only",
@@ -38,6 +38,7 @@ TEST_CONTROLLER_CHOICES = [
     "augmented_pd",
     "augmented_pd_friction_model",
     "augmented_pid_friction_model",
+    "computed_pid_model",
     "computed_pid_friction_model",
     "gazebo_friction_model",
     "feedforward_friction_model",
@@ -323,6 +324,7 @@ def main() -> int:
     compute_test_tau = None
     compute_augmented_pd_components = None
     compute_augmented_pid_friction_model_components = None
+    compute_computed_pid_model_components = None
     compute_computed_pid_friction_model_components = None
     active_controller_modes = {args.test_controller}
     if args.return_to_start or args.return_home:
@@ -333,6 +335,8 @@ def main() -> int:
         from test_controller import compute_augmented_pd_components
     if "augmented_pid_friction_model" in active_controller_modes:
         from test_controller import compute_augmented_pid_friction_model_components
+    if "computed_pid_model" in active_controller_modes:
+        from test_controller import compute_computed_pid_model_components
     if "computed_pid_friction_model" in active_controller_modes:
         from test_controller import compute_computed_pid_friction_model_components
     if tau_fb_limit is not None and "augmented_pd" not in active_controller_modes:
@@ -404,6 +408,21 @@ def main() -> int:
                 model_damping=model_damping,
                 model_friction=model_friction,
                 friction_deadband=args.friction_deadband,
+                dynamics_mode=args.dynamics_mode,
+                finite_diff_step=args.finite_diff_step,
+                finite_diff_method=args.finite_diff_method,
+            )
+        elif controller_mode == "computed_pid_model":
+            tau_i, tau = compute_computed_pid_model_components(
+                q_actual,
+                dq_actual,
+                q_des,
+                dq_des,
+                ddq_des,
+                e_int=e_int,
+                kp=phase_kp,
+                kd=phase_kd,
+                ki=ki,
                 dynamics_mode=args.dynamics_mode,
                 finite_diff_step=args.finite_diff_step,
                 finite_diff_method=args.finite_diff_method,

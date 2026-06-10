@@ -386,6 +386,80 @@ def coriolis_from_dM(dM: np.ndarray, dq: np.ndarray) -> np.ndarray:
     return C
 
 
+def _link_com_transforms_and_space_jacobian(
+    q: np.ndarray,
+    p: Optional[Z1Params] = None,
+) -> Tuple[Tuple[np.ndarray, ...], np.ndarray]:
+    p = z1_parameters() if p is None else p
+    q = _as_vec6(q, "q")
+    xi, w_list, v_list = z1_twists(p)
+    E = [twist_exp(w_list[:, i], v_list[:, i], q[i]) for i in range(NDOF)]
+
+    g_coms = []
+    g = np.eye(4)
+    for l in range(NDOF):
+        g = g @ E[l]
+        g_coms.append(g @ p.gsl0[l])
+
+    J_space = np.zeros((6, NDOF), dtype=float)
+    T_prev = np.eye(4)
+    for j in range(NDOF):
+        J_space[:, j] = adjoint(T_prev) @ xi[:, j]
+        T_prev = T_prev @ E[j]
+
+    return tuple(g_coms), J_space
+
+
+def link_com_positions(q: np.ndarray) -> np.ndarray:
+    """Return the world-frame COM positions as a 3x6 matrix."""
+    g_coms, _ = _link_com_transforms_and_space_jacobian(q)
+    return np.column_stack([g[:3, 3] for g in g_coms])
+
+
+def potential_energy(q: np.ndarray) -> float:
+    """Return gravitational potential energy V(q)=sum_i m_i*g*z_i(q)."""
+    p = z1_parameters()
+    p_com = link_com_positions(q)
+    return float(np.sum(p.m_vec * p.g_const * p_com[2, :]))
+
+
+def gravity_vector_finite_difference(q: np.ndarray, step: float = 1e-6) -> np.ndarray:
+    """Return dV/dq from a central finite difference of potential_energy(q)."""
+    q = _as_vec6(q, "q")
+    h = float(step)
+    if h <= 0.0:
+        raise ValueError("finite-difference step must be positive")
+
+    N = np.zeros(NDOF, dtype=float)
+    for j in range(NDOF):
+        q_plus = q.copy()
+        q_minus = q.copy()
+        q_plus[j] += h
+        q_minus[j] -= h
+        N[j] = (potential_energy(q_plus) - potential_energy(q_minus)) / (2.0 * h)
+    return N
+
+
+def gravity_vector_virtual_work(q: np.ndarray) -> np.ndarray:
+    """Return the PDF-style gravity gradient using body Jacobians.
+
+    The calculation uses each link COM frame, a body-frame gravity wrench, and
+    the convention dV/dq = -J_body.T @ F_gravity_body.
+    """
+    q = _as_vec6(q, "q")
+    p = z1_parameters()
+    g_coms, J_space = _link_com_transforms_and_space_jacobian(q, p=p)
+    gravity_force_space = np.array([0.0, 0.0, -p.g_const], dtype=float)
+
+    N = np.zeros(NDOF, dtype=float)
+    for l, g_com in enumerate(g_coms):
+        J_body = adjoint_inverse(g_com) @ J_space
+        force_body = g_com[:3, :3].T @ (p.m_vec[l] * gravity_force_space)
+        gravity_wrench_body = np.r_[force_body, np.zeros(3)]
+        N[: l + 1] += -(J_body[:, : l + 1].T @ gravity_wrench_body)
+    return N
+
+
 def gravity_vector(q: np.ndarray) -> np.ndarray:
     q = _as_vec6(q, "q")
     if _FAST_DYNAMICS is not None:

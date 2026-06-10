@@ -26,6 +26,7 @@ TEST_CONTROLLER_MODES = (
     "augmented_pd",
     "augmented_pd_friction_model",
     "augmented_pid_friction_model",
+    "computed_pid_model",
     "computed_pid_friction_model",
     "gazebo_friction_model",
     "feedforward_friction_model",
@@ -158,6 +159,23 @@ def compute_test_tau(
         )
         return tau
 
+    if mode == "computed_pid_model":
+        _, tau = compute_computed_pid_model_components(
+            q,
+            dq,
+            q_des,
+            dq_des,
+            ddq_des,
+            e_int=e_int,
+            kp=kp,
+            kd=kd,
+            ki=ki,
+            dynamics_mode=dynamics_mode,
+            finite_diff_step=finite_diff_step,
+            finite_diff_method=finite_diff_method,
+        )
+        return tau
+
     if mode == "computed_pid_friction_model":
         _, tau = compute_computed_pid_friction_model_components(
             q,
@@ -271,6 +289,10 @@ def _gazebo_friction_terms(
     velocity_direction = np.sign(dq_des)
     error_direction = np.sign(e)
     direction = np.where(np.abs(dq_des) > FRICTION_VELOCITY_EPS, velocity_direction, error_direction)
+    error_active = np.abs(e) > float(friction_deadband)
+    velocity_active = np.abs(dq_des) > FRICTION_VELOCITY_EPS
+    error_opposes_feedforward = error_active & velocity_active & (error_direction != velocity_direction)
+    direction = np.where(error_opposes_feedforward, error_direction, direction)
     wants_motion = (np.abs(e) > float(friction_deadband)) | (np.abs(dq_des) > FRICTION_VELOCITY_EPS)
     tau_friction = friction_values * direction * wants_motion
     return tau_damping, tau_friction
@@ -372,6 +394,46 @@ def compute_augmented_pid_friction_model_components(
     return tau_ff, tau_fb, tau_i, tau
 
 
+def compute_computed_pid_model_components(
+    q,
+    dq,
+    q_des,
+    dq_des,
+    ddq_des,
+    e_int=None,
+    kp=None,
+    kd=None,
+    ki=None,
+    dynamics_mode: str = "analytic",
+    finite_diff_step: float = 1e-5,
+    finite_diff_method: str = "central",
+) -> tuple[np.ndarray, np.ndarray]:
+    q = _vec6(q, "q")
+    dq = _vec6(dq, "dq")
+    q_des = _vec6(q_des, "q_des")
+    dq_des = _vec6(dq_des, "dq_des")
+    if ddq_des is None:
+        raise ValueError("ddq_des is required for computed_pid_model test controller")
+    ddq_des = _vec6(ddq_des, "ddq_des")
+    e_int = np.zeros(NDOF, dtype=float) if e_int is None else _vec6(e_int, "e_int")
+    Kp, Kd, Ki = _resolve_pid_gains(kp=kp, kd=kd, ki=ki)
+
+    e = q_des - q
+    de = dq_des - dq
+    i_accel = Ki @ e_int
+    ddq_cmd = ddq_des + Kd @ de + Kp @ e + i_accel
+    M, C, N, _ = _dynamics_for_mode(
+        q,
+        dq,
+        mode=dynamics_mode,
+        finite_diff_step=finite_diff_step,
+        finite_diff_method=finite_diff_method,
+    )
+    tau_model = M @ ddq_cmd + C @ dq + N
+    tau_i = M @ i_accel
+    return tau_i, tau_model
+
+
 def compute_computed_pid_friction_model_components(
     q,
     dq,
@@ -390,28 +452,23 @@ def compute_computed_pid_friction_model_components(
     finite_diff_method: str = "central",
 ) -> tuple[np.ndarray, np.ndarray]:
     q = _vec6(q, "q")
-    dq = _vec6(dq, "dq")
     q_des = _vec6(q_des, "q_des")
     dq_des = _vec6(dq_des, "dq_des")
-    if ddq_des is None:
-        raise ValueError("ddq_des is required for computed_pid_friction_model test controller")
-    ddq_des = _vec6(ddq_des, "ddq_des")
-    e_int = np.zeros(NDOF, dtype=float) if e_int is None else _vec6(e_int, "e_int")
-    Kp, Kd, Ki = _resolve_pid_gains(kp=kp, kd=kd, ki=ki)
-
-    e = q_des - q
-    de = dq_des - dq
-    i_accel = Ki @ e_int
-    ddq_cmd = ddq_des + Kd @ de + Kp @ e + i_accel
-    M, C, N, _ = _dynamics_for_mode(
+    tau_i, tau_model = compute_computed_pid_model_components(
         q,
         dq,
-        mode=dynamics_mode,
+        q_des,
+        dq_des,
+        ddq_des,
+        e_int=e_int,
+        kp=kp,
+        kd=kd,
+        ki=ki,
+        dynamics_mode=dynamics_mode,
         finite_diff_step=finite_diff_step,
         finite_diff_method=finite_diff_method,
     )
-    tau_model = M @ ddq_cmd + C @ dq + N
-    tau_i = M @ i_accel
+    e = q_des - q
     tau_damping, tau_friction = _gazebo_friction_terms(
         e,
         dq_des,
