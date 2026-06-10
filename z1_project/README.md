@@ -39,11 +39,11 @@ python3 setup_fast_dynamics.py build_ext --inplace
 
 `move_time = 6 s` means 3000 loop steps at 500 Hz.
 
-`hold_time` is an initial hold before the quintic motion starts. By default,
-after the move ends the trajectory commands a second trajectory to the
-configured home pose. Add `--no-return-home` to hold `q_goal` after the move, or
-add `--return-to-start` to return to the measured `q_start` instead. For a
-return phase, `--duration` must be at least `hold_time + move_time + return_time`.
+`hold_time` holds `q_goal` after the outbound move and before any return phase.
+By default, after this hold ends the trajectory commands a second trajectory to
+the configured home pose. Add `--no-return-home` to hold `q_goal` after the move,
+or add `--return-to-start` to return to the measured `q_start` instead. For a
+return phase, `--duration` must be at least `move_time + hold_time + return_time`.
 
 ## Offline Preview Commands
 

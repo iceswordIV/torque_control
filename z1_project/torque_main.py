@@ -27,6 +27,9 @@ DEFAULT_MODEL_FRICTION = "1 2 1 1 1 1"
 DEFAULT_RETURN_CONTROLLER = "augmented_pd_friction_model"
 DEFAULT_RETURN_KP = "20 20 40 8 5 5"
 DEFAULT_RETURN_KD = "3 3 6 1 0.6 0.4"
+DEFAULT_KI = "0 0 0 0 0 0"
+DEFAULT_INTEGRAL_LIMIT = "0.8 0.8 0.8 0.8 0.8 0.8"
+PID_CONTROLLER_MODES = {"augmented_pid_friction_model", "computed_pid_friction_model"}
 TEST_CONTROLLER_CHOICES = [
     "none",
     "gravity_only",
@@ -34,6 +37,8 @@ TEST_CONTROLLER_CHOICES = [
     "pd_gravity",
     "augmented_pd",
     "augmented_pd_friction_model",
+    "augmented_pid_friction_model",
+    "computed_pid_friction_model",
     "gazebo_friction_model",
     "feedforward_friction_model",
 ]
@@ -102,21 +107,37 @@ def desired_trajectory(
     q_return: np.ndarray,
     elapsed: float,
 ):
-    local_t = elapsed - args.hold_time
     if not (args.return_to_start or args.return_home):
-        return trajectory_fn(q_start, q_goal, local_t, args.move_time)
+        return trajectory_fn(q_start, q_goal, elapsed, args.move_time)
 
-    if local_t <= args.move_time:
-        return trajectory_fn(q_start, q_goal, local_t, args.move_time)
+    if elapsed <= args.move_time:
+        return trajectory_fn(q_start, q_goal, elapsed, args.move_time)
+    if elapsed <= args.move_time + args.hold_time:
+        return q_goal.copy(), np.zeros(NDOF), np.zeros(NDOF)
 
-    return_t = local_t - args.move_time
+    return_t = elapsed - args.move_time - args.hold_time
     return trajectory_fn(q_goal, q_return, return_t, args.return_time)
 
 
 def return_phase_active(args, elapsed: float) -> bool:
     if not (args.return_to_start or args.return_home):
         return False
-    return elapsed - args.hold_time > args.move_time
+    return elapsed > args.move_time + args.hold_time
+
+
+def trajectory_phase_name(args, elapsed: float) -> str:
+    if args.return_to_start or args.return_home:
+        if elapsed <= args.move_time:
+            return "outbound"
+        if elapsed <= args.move_time + args.hold_time:
+            return "outbound_hold"
+        return_t = elapsed - args.move_time - args.hold_time
+        if return_t <= args.return_time:
+            return "return"
+        return "return_hold"
+    if elapsed <= args.move_time:
+        return "outbound"
+    return "goal_hold"
 
 
 def write_header(writer: csv.writer) -> None:
@@ -134,6 +155,8 @@ def write_header(writer: csv.writer) -> None:
         + [f"tau_total_{i + 1}" for i in range(NDOF)]
         + ["controller_type"]
         + ["dynamics_mode", "finite_diff_step", "finite_diff_method"]
+        + [f"e_int_{i + 1}" for i in range(NDOF)]
+        + [f"tau_i_{i + 1}" for i in range(NDOF)]
     )
 
 
@@ -141,6 +164,7 @@ def print_summary(args, steps: int, q_start: np.ndarray, q_goal: np.ndarray, max
     print("dt =", args.dt)
     print("duration =", args.duration)
     print("move_time =", args.move_time)
+    print("hold_time =", args.hold_time)
     print("return_to_start =", args.return_to_start)
     print("return_home =", args.return_home)
     if args.return_to_start or args.return_home:
@@ -190,7 +214,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target", type=str, default=DEFAULT_TARGET)
     parser.add_argument("--scale", type=float, default=0.25)
     parser.add_argument("--move-time", type=float, default=5.0)
-    parser.add_argument("--hold-time", type=float, default=0.0)
+    parser.add_argument("--hold-time", type=float, default=0.0, help="hold at q_goal after outbound motion before return [s]")
     parser.add_argument("--return-to-start", action="store_true", help="after reaching q_goal, command a return trajectory to measured q_start instead of home")
     parser.add_argument("--return-home", dest="return_home", action="store_true", default=True, help="after reaching q_goal, command a return trajectory to --home-target (default)")
     parser.add_argument("--no-return-home", dest="return_home", action="store_false", help="after reaching q_goal, hold q_goal instead of returning home")
@@ -217,6 +241,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trajectory-profile", choices=["quintic", "scurve"], default="quintic")
     parser.add_argument("--kp", type=str, default=None)
     parser.add_argument("--kd", type=str, default=None)
+    parser.add_argument("--ki", type=str, default=DEFAULT_KI)
+    parser.add_argument("--integral-limit", type=str, default=DEFAULT_INTEGRAL_LIMIT, help="PID integral state limit, scalar or 6 values [rad*s]")
     parser.add_argument("--tau-limit", type=str, default=None, help="optional symmetric torque limit, scalar or 6 values [Nm]")
     parser.add_argument("--tau-fb-limit", type=str, default=None, help="optional symmetric augmented-PD feedback torque limit, scalar or 6 values [Nm]")
     parser.add_argument("--model-damping", type=str, default=DEFAULT_MODEL_DAMPING, help="Gazebo friction-model damping values, scalar or 6 values")
@@ -272,6 +298,8 @@ def main() -> int:
     home_target = parse_vec6(args.home_target)
     kp = parse_gain_text(args.kp)
     kd = parse_gain_text(args.kd)
+    ki = parse_gain_text(args.ki)
+    integral_limit = parse_limit_text(args.integral_limit, "--integral-limit")
     return_kp_text = args.return_kp
     return_kd_text = args.return_kd
     if args.return_controller == "augmented_pd_friction_model":
@@ -294,6 +322,8 @@ def main() -> int:
     trajectory_fn = quintic_trajectory if args.trajectory_profile == "quintic" else scurve_trajectory
     compute_test_tau = None
     compute_augmented_pd_components = None
+    compute_augmented_pid_friction_model_components = None
+    compute_computed_pid_friction_model_components = None
     active_controller_modes = {args.test_controller}
     if args.return_to_start or args.return_home:
         active_controller_modes.add(args.return_controller)
@@ -301,12 +331,17 @@ def main() -> int:
         from test_controller import compute_test_tau
     if "augmented_pd" in active_controller_modes:
         from test_controller import compute_augmented_pd_components
+    if "augmented_pid_friction_model" in active_controller_modes:
+        from test_controller import compute_augmented_pid_friction_model_components
+    if "computed_pid_friction_model" in active_controller_modes:
+        from test_controller import compute_computed_pid_friction_model_components
     if tau_fb_limit is not None and "augmented_pd" not in active_controller_modes:
         raise ValueError("--tau-fb-limit only applies when augmented_pd is an active controller")
 
-    def compute_phase_tau(controller_mode, phase_kp, phase_kd, q_actual, dq_actual, q_des, dq_des, ddq_des):
+    def compute_phase_tau(controller_mode, phase_kp, phase_kd, q_actual, dq_actual, q_des, dq_des, ddq_des, e_int):
         tau_ff = None
         tau_fb = None
+        tau_i = np.zeros(NDOF, dtype=float)
         if controller_mode == "none":
             tau = compute_tau(
                 q_actual,
@@ -337,6 +372,42 @@ def main() -> int:
             )
             tau_fb = clip_symmetric(tau_fb, tau_fb_limit)
             tau = tau_ff + tau_fb
+        elif controller_mode == "augmented_pid_friction_model":
+            tau_ff, tau_fb, tau_i, tau = compute_augmented_pid_friction_model_components(
+                q_actual,
+                dq_actual,
+                q_des,
+                dq_des,
+                ddq_des,
+                e_int=e_int,
+                kp=phase_kp,
+                kd=phase_kd,
+                ki=ki,
+                model_damping=model_damping,
+                model_friction=model_friction,
+                friction_deadband=args.friction_deadband,
+                dynamics_mode=args.dynamics_mode,
+                finite_diff_step=args.finite_diff_step,
+                finite_diff_method=args.finite_diff_method,
+            )
+        elif controller_mode == "computed_pid_friction_model":
+            tau_i, tau = compute_computed_pid_friction_model_components(
+                q_actual,
+                dq_actual,
+                q_des,
+                dq_des,
+                ddq_des,
+                e_int=e_int,
+                kp=phase_kp,
+                kd=phase_kd,
+                ki=ki,
+                model_damping=model_damping,
+                model_friction=model_friction,
+                friction_deadband=args.friction_deadband,
+                dynamics_mode=args.dynamics_mode,
+                finite_diff_step=args.finite_diff_step,
+                finite_diff_method=args.finite_diff_method,
+            )
         else:
             tau = compute_test_tau(
                 q_actual,
@@ -354,7 +425,7 @@ def main() -> int:
                 finite_diff_step=args.finite_diff_step,
                 finite_diff_method=args.finite_diff_method,
             )
-        return tau_ff, tau_fb, tau
+        return tau_ff, tau_fb, tau_i, tau
 
     stop_requested = False
 
@@ -401,6 +472,8 @@ def main() -> int:
     }
     frozen_feedback_since = None
     run_start = None
+    e_int = np.zeros(NDOF, dtype=float)
+    last_trajectory_phase = None
 
     try:
         with open(args.csv_log, "w", newline="") as f:
@@ -420,7 +493,11 @@ def main() -> int:
                     newer_than_timestamp=sensor_timestamp,
                 )
                 q_des, dq_des, ddq_des = desired_trajectory(args, trajectory_fn, q_start, q_goal, q_return, elapsed)
-                in_return_phase = return_phase_active(args, elapsed)
+                trajectory_phase = trajectory_phase_name(args, elapsed)
+                if trajectory_phase != last_trajectory_phase:
+                    e_int[:] = 0.0
+                    last_trajectory_phase = trajectory_phase
+                in_return_phase = trajectory_phase in ("return", "return_hold")
                 phase = "return" if in_return_phase else "outbound"
                 if in_return_phase:
                     active_controller_mode = args.return_controller
@@ -434,7 +511,15 @@ def main() -> int:
                     active_kp = kp
                     active_kd = kd
                     maxes["outbound_steps"] += 1
-                tau_ff, tau_fb, tau = compute_phase_tau(
+                if active_controller_mode in PID_CONTROLLER_MODES:
+                    next_e_int = e_int + (q_des - q_actual) * args.dt
+                    if integral_limit is not None:
+                        next_e_int = np.clip(next_e_int, -integral_limit, integral_limit)
+                    e_int[:] = next_e_int
+                    e_int_log = e_int.copy()
+                else:
+                    e_int_log = np.zeros(NDOF, dtype=float)
+                tau_ff, tau_fb, tau_i, tau = compute_phase_tau(
                     active_controller_mode,
                     active_kp,
                     active_kd,
@@ -443,6 +528,7 @@ def main() -> int:
                     q_des,
                     dq_des,
                     ddq_des,
+                    e_int_log,
                 )
                 tau = clip_symmetric(tau, tau_limit)
                 if not np.all(np.isfinite(tau)):
@@ -483,6 +569,8 @@ def main() -> int:
                         args.dynamics_mode,
                         args.finite_diff_step if args.dynamics_mode == "finite_difference" else "",
                         args.finite_diff_method if args.dynamics_mode == "finite_difference" else "",
+                        *e_int_log,
+                        *tau_i,
                     ]
                 )
                 maxes["q_delta"] = np.maximum(maxes["q_delta"], np.abs(q_des - q_start))

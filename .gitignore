@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# keep CSV logs if needed, but ignore generated plot/images
+z1_project/logs/plots/
+z1_project/logs/*.png
+z1_project/logs/*.jpg
+z1_project/logs/*.pdf
+
+# secrets
+.env
+auth.json
+.codex/
