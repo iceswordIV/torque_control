@@ -6,12 +6,8 @@ Goal for limited lab time:
 
 1. Start the real Z1 control chain correctly.
 2. Use `computed_pid_friction_model`.
-3. Test only J1-J3 with small motions.
-4. Stop after J1-J3 and inspect logs.
-
-Do **not** run J1-J6 workspace tests today.
-
-Do **not** run forward-pose tests today.
+3. Test J1-J6 with small single-joint motions.
+4. If single-joint tests are stable, test forward pose manually from 25% to 100%.
 
 Important assumptions:
 
@@ -20,7 +16,8 @@ Important assumptions:
 - Do **not** use `--gazebo-ports` for real hardware.
 - Keep gripper enabled. Do **not** use `--no-gripper` unless SDK reports gripper connection errors.
 - Use torque limit `"5 8 10 10 3 3"`.
-- These tests are safety/communication/sign tests first, not final performance tests.
+- Start with conservative gains and zero Gazebo friction compensation.
+- These tests are real-hardware bring-up tests, not final performance tuning.
 
 ---
 
@@ -85,17 +82,15 @@ cd /home/icesword/Desktop/torque_control/z1_project/cpp/build
 ./pure_torque_bridge --dt 0.002
 ```
 
-In that fallback case, Python `--tau-limit` is the only clamp, so run only the tiny tests below.
+In that fallback case, Python `--tau-limit` is the only clamp, so avoid large motions.
 
-Watch the bridge output. It should print a rate. If the rate is very low or unstable, stop.
+Watch the bridge output. It should print a rate. Around 300-500 Hz is acceptable. If the rate is very low or unstable, stop.
 
 ---
 
-# 4. Terminal 3: separate first-hand J1-J3 tests
+## 4. Shared Python settings
 
-Run these one by one. Do not paste the full sequence until the previous joint is stable.
-
-Shared settings:
+Use these for the first real tests:
 
 ```text
 controller = computed_pid_friction_model
@@ -107,11 +102,15 @@ friction   = "0 0 0 0 0 0"
 tau-limit  = "5 8 10 10 3 3"
 ```
 
-For real first tests, damping/friction are zero because the previous friction values were Gazebo compensation values.
+For real first tests, damping/friction are zero because previous friction values were Gazebo compensation values.
 
 ---
 
-## 4.1 J1 +2 deg first
+# Part A: first-hand J1-J3 tests
+
+Run these first, one by one.
+
+## A1. J1 +2 deg
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -138,19 +137,7 @@ python3 torque_main.py \
   --csv-log logs/real_j1_pos2_first.csv
 ```
 
-Check:
-
-- J1 direction is correct.
-- No vibration.
-- No sagging or unexpected motion.
-- `effective loop rate` is reasonable.
-- Ctrl+C or stop file stops safely.
-
----
-
-## 4.2 J1 +5 deg second
-
-Only run this if J1 +2 deg is good.
+## A2. J1 +5 deg
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -177,11 +164,7 @@ python3 torque_main.py \
   --csv-log logs/real_j1_pos5_second.csv
 ```
 
----
-
-## 4.3 J2 +2 deg first
-
-Only run this after J1 is good.
+## A3. J2 +2 deg
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -208,11 +191,7 @@ python3 torque_main.py \
   --csv-log logs/real_j2_pos2_first.csv
 ```
 
----
-
-## 4.4 J2 +5 deg second
-
-Only run this if J2 +2 deg is good.
+## A4. J2 +5 deg
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -239,11 +218,7 @@ python3 torque_main.py \
   --csv-log logs/real_j2_pos5_second.csv
 ```
 
----
-
-## 4.5 J3 -2 deg first
-
-Only run this after J1 and J2 are good.
+## A5. J3 -2 deg
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -270,11 +245,7 @@ python3 torque_main.py \
   --csv-log logs/real_j3_neg2_first.csv
 ```
 
----
-
-## 4.6 J3 -5 deg second
-
-Only run this if J3 -2 deg is good.
+## A6. J3 -5 deg
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -303,14 +274,16 @@ python3 torque_main.py \
 
 ---
 
-# 5. Optional J1-J3 sequence script
+# Part B: fast J1-J6 single-joint check
 
-Only create and use this after the separate first-hand tests above are stable.
+Run this only if J1-J3 are stable. This checks one small command per joint.
+
+It excludes positive J4 because positive J4 was already a known bad direction in simulation and SDK comparison. Use J4 negative only.
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
 
-cat > run_real_j1_j2_j3_computed_pid_small.sh <<'SH'
+cat > run_real_j1_to_j6_computed_pid_quick.sh <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -332,7 +305,7 @@ run_one() {
 
   echo
   echo "============================================================"
-  echo "REAL Z1 computed_pid_friction_model test"
+  echo "REAL Z1 quick single-joint check"
   echo "joint=${joint}, angle=${angle} deg"
   echo "log=logs/${label}.csv"
   echo "tau-limit=${TAU_LIMIT}"
@@ -362,41 +335,161 @@ run_one() {
     --csv-log "logs/${label}.csv"
 
   echo "Finished ${label}"
-  sleep 2
+  sleep 1
 }
 
-echo "Real Z1 J1-J3 small computed-PID/friction sequence."
+echo "Real Z1 quick J1-J6 computed-PID/friction check."
 echo "Use z1_ctrl, not sim_ctrl."
 echo "Use pure_torque_bridge without --gazebo-ports."
 echo "Gripper should remain enabled."
-echo "Emergency stop from another terminal:"
-echo "  touch /tmp/z1_torque_\$(id -u)/z1_stop.txt"
+echo "Emergency stop: touch /tmp/z1_torque_\$(id -u)/z1_stop.txt"
 echo
 
-run_one 1  2  real_j1_pos2_sequence 8  8  25
-run_one 1  5  real_j1_pos5_sequence 8  8  25
-run_one 2  2  real_j2_pos2_sequence 10 10 28
-run_one 2  5  real_j2_pos5_sequence 10 10 28
-run_one 3 -2  real_j3_neg2_sequence 10 10 28
-run_one 3 -5  real_j3_neg5_sequence 10 10 28
+run_one 1  5  real_j1_pos5_quick 8  8  25
+run_one 2  5  real_j2_pos5_quick 10 10 28
+run_one 3 -5  real_j3_neg5_quick 10 10 28
+run_one 4 -2  real_j4_neg2_quick 10 10 28
+run_one 5  5  real_j5_pos5_quick 8  8  25
+run_one 6  5  real_j6_pos5_quick 8  8  25
 
 echo
-echo "All J1-J3 small real tests completed. Stop here and inspect logs."
+echo "Quick J1-J6 real check completed."
 SH
 
-chmod +x run_real_j1_j2_j3_computed_pid_small.sh
-```
-
-Run it:
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-bash run_real_j1_j2_j3_computed_pid_small.sh
+chmod +x run_real_j1_to_j6_computed_pid_quick.sh
+bash run_real_j1_to_j6_computed_pid_quick.sh
 ```
 
 ---
 
-# 6. Stop rules
+# Part C: manual forward-pose tests from 25% to 100%
+
+Only run this if the J1-J6 quick check is stable.
+
+Full target:
+
+```text
+[0, 1.5, -1.0, -0.54, 0, 0]
+```
+
+Use these scaled targets:
+
+```text
+25%  = [0, 0.375, -0.25, -0.135, 0, 0]
+50%  = [0, 0.750, -0.50, -0.270, 0, 0]
+75%  = [0, 1.125, -0.75, -0.405, 0, 0]
+100% = [0, 1.500, -1.00, -0.540, 0, 0]
+```
+
+## C1. Forward pose 25%
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+python3 torque_main.py \
+  --mode full_pose_absolute \
+  --target "0 0.375 -0.25 -0.135 0 0" \
+  --trajectory-profile scurve \
+  --move-time 20 \
+  --hold-time 3 \
+  --return-to-start \
+  --return-time 20 \
+  --duration 48 \
+  --test-controller computed_pid_friction_model \
+  --return-controller computed_pid_friction_model \
+  --kp "16 16 16 16 5 5" \
+  --kd "6 6 6 6 2 2" \
+  --ki "0 0 0 0 0 0" \
+  --model-damping "0 0 0 0 0 0" \
+  --model-friction "0 0 0 0 0 0" \
+  --tau-limit "5 8 10 10 3 3" \
+  --dynamics-mode analytic \
+  --csv-log logs/real_forward_pose_25pct_computed_pid.csv
+```
+
+## C2. Forward pose 50%
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+python3 torque_main.py \
+  --mode full_pose_absolute \
+  --target "0 0.75 -0.50 -0.270 0 0" \
+  --trajectory-profile scurve \
+  --move-time 20 \
+  --hold-time 3 \
+  --return-to-start \
+  --return-time 20 \
+  --duration 48 \
+  --test-controller computed_pid_friction_model \
+  --return-controller computed_pid_friction_model \
+  --kp "16 16 16 16 5 5" \
+  --kd "6 6 6 6 2 2" \
+  --ki "0 0 0 0 0 0" \
+  --model-damping "0 0 0 0 0 0" \
+  --model-friction "0 0 0 0 0 0" \
+  --tau-limit "5 8 10 10 3 3" \
+  --dynamics-mode analytic \
+  --csv-log logs/real_forward_pose_50pct_computed_pid.csv
+```
+
+## C3. Forward pose 75%
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+python3 torque_main.py \
+  --mode full_pose_absolute \
+  --target "0 1.125 -0.75 -0.405 0 0" \
+  --trajectory-profile scurve \
+  --move-time 20 \
+  --hold-time 3 \
+  --return-to-start \
+  --return-time 20 \
+  --duration 48 \
+  --test-controller computed_pid_friction_model \
+  --return-controller computed_pid_friction_model \
+  --kp "16 16 16 16 5 5" \
+  --kd "6 6 6 6 2 2" \
+  --ki "0 0 0 0 0 0" \
+  --model-damping "0 0 0 0 0 0" \
+  --model-friction "0 0 0 0 0 0" \
+  --tau-limit "5 8 10 10 3 3" \
+  --dynamics-mode analytic \
+  --csv-log logs/real_forward_pose_75pct_computed_pid.csv
+```
+
+## C4. Forward pose 100%
+
+Only run this if 25%, 50%, and 75% are stable.
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+python3 torque_main.py \
+  --mode full_pose_absolute \
+  --target "0 1.5 -1.0 -0.54 0 0" \
+  --trajectory-profile scurve \
+  --move-time 25 \
+  --hold-time 3 \
+  --return-to-start \
+  --return-time 25 \
+  --duration 58 \
+  --test-controller computed_pid_friction_model \
+  --return-controller computed_pid_friction_model \
+  --kp "16 16 16 16 5 5" \
+  --kd "6 6 6 6 2 2" \
+  --ki "0 0 0 0 0 0" \
+  --model-damping "0 0 0 0 0 0" \
+  --model-friction "0 0 0 0 0 0" \
+  --tau-limit "5 8 10 10 3 3" \
+  --dynamics-mode analytic \
+  --csv-log logs/real_forward_pose_100pct_computed_pid.csv
+```
+
+---
+
+# Stop rules
 
 Stop immediately if any of these happen:
 
@@ -415,5 +508,3 @@ Emergency stop command:
 ```bash
 touch /tmp/z1_torque_$(id -u)/z1_stop.txt
 ```
-
-After J1-J3, stop and inspect logs. Do not run J1-J6 or forward-pose tests in limited lab time.
