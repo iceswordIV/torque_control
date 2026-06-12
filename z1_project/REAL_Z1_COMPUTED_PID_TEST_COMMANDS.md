@@ -7,8 +7,9 @@ Goal for limited lab time:
 1. Start the real Z1 control chain correctly.
 2. Use `computed_pid_friction_model`.
 3. Use the Gazebo-tuned parameters that worked well yesterday.
-4. Manually test J1-J6 joint motions at 5, 10, and 30 deg.
-5. If joint tests are stable, manually test forward pose from 25% to 100%.
+4. Use the prehome command often, so every test starts from a known pose.
+5. Manually test J1-J6 joint motions at 5, 10, and 30 deg.
+6. If joint tests are stable, manually test forward pose from 25% to 100%.
 
 Important assumptions:
 
@@ -17,7 +18,7 @@ Important assumptions:
 - Do **not** use `--gazebo-ports` for real hardware.
 - Keep gripper enabled. Do **not** use `--no-gripper` unless SDK reports gripper connection errors.
 - Use bridge/Python torque limit `"5 8 10 10 3 3"`.
-- These commands now use the stronger Gazebo-tuned computed-PID/friction parameters.
+- These commands use the stronger Gazebo-tuned computed-PID/friction parameters.
 
 Gazebo-tuned parameters used here:
 
@@ -28,6 +29,7 @@ KI       = "0 0 0 20 0 0"
 DAMPING  = "1 2 1 1 1 1"
 FRICTION = "1 2 1 1.5 1 1.5"
 TAU      = "5 8 10 10 3 3"
+PREHOME  = "0 0 -0.005 -0.074 0 0"
 ```
 
 Notes:
@@ -35,6 +37,7 @@ Notes:
 - `KI4 = 20` is kept because yesterday J4 negative and forward-pose behavior used the tuned controller style.
 - `FRICTION` and `DAMPING` are the Gazebo-tuned compensation values. They may not be physically exact for the real arm, but these are the parameters that worked in the simulation tests.
 - Positive J4 was the known difficult direction. Test J4 negative first. Test J4 positive only if time and safety allow.
+- Prehome is important. Run prehome before the first real test, after any failed/ugly motion, and before forward-pose tests.
 
 ---
 
@@ -199,13 +202,78 @@ python3 torque_main.py \
 
 ---
 
-# Part B: manual J1-J6 joint tests at 5, 10, 30 deg
+# Part B: manual prehome command
+
+Prehome target:
+
+```text
+0 0 -0.005 -0.074 0 0
+```
+
+Use this after the bridge is running and before important tests. It moves the arm slowly to the same prehome pose used in the Gazebo evaluation.
+
+## B1. Paste this helper once in Terminal 3
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+prehome() {
+  local label="${1:-manual}"
+  local log="logs/real_prehome_${label}_$(date +%H%M%S).csv"
+
+  echo
+  echo "============================================================"
+  echo "REAL Z1 PREHOME"
+  echo "target = 0 0 -0.005 -0.074 0 0"
+  echo "log=${log}"
+  echo "STOP if wrong direction, vibration, sagging, or unexpected motion."
+  echo "============================================================"
+  read -p "Press Enter to move to prehome, or Ctrl+C to abort..."
+
+  python3 torque_main.py \
+    --mode full_pose_absolute \
+    --target "0 0 -0.005 -0.074 0 0" \
+    --trajectory-profile scurve \
+    --move-time 12 \
+    --hold-time 3 \
+    --no-return-home \
+    --duration 16 \
+    --test-controller computed_pid_friction_model \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2 1 1.5 1 1.5" \
+    --tau-limit "5 8 10 10 3 3" \
+    --dynamics-mode analytic \
+    --csv-log "$log"
+}
+```
+
+## B2. Run prehome by hand
+
+```bash
+prehome start
+```
+
+Recommended use:
+
+```bash
+prehome before_j1
+prehome after_bad_motion
+prehome before_forward_pose
+```
+
+---
+
+# Part C: manual J1-J6 joint tests at 5, 10, 30 deg
 
 This part is **by hand**. Paste the helper function once, then run one `run_joint ...` line at a time.
 
 Do not run the entire list blindly. After each line, watch the arm and check the terminal output.
 
-## B1. Paste this helper once in Terminal 3
+## C1. Paste this helper once in Terminal 3
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -277,9 +345,9 @@ run_joint() {
 }
 ```
 
-## B2. Manual test order
+## C2. Manual test order
 
-Run one line at a time.
+Run one line at a time. Run `prehome ...` between tests if the arm does not return cleanly or before starting a new group.
 
 ### J1
 
@@ -354,9 +422,11 @@ run_joint 6 -30
 
 ---
 
-# Part C: manual forward-pose tests from 25% to 100%
+# Part D: manual forward-pose tests from 25% to 100%
 
 Only run this if the manual J1-J6 joint tests are stable.
+
+Run `prehome before_forward_pose` first.
 
 Full target:
 
@@ -373,7 +443,7 @@ Use these scaled targets:
 100% = [0, 1.500, -1.00, -0.540, 0, 0]
 ```
 
-## C1. Paste this helper once
+## D1. Paste this helper once
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -419,9 +489,9 @@ run_forward() {
 }
 ```
 
-## C2. Run forward pose by hand
+## D2. Run forward pose by hand
 
-Run one line at a time.
+Run one line at a time. Run `prehome before_forward_pose` before this group, and optionally between scale tests if the arm does not return cleanly.
 
 ```bash
 run_forward 25pct  "0 0.375 -0.25 -0.135 0 0" 20 20 48
