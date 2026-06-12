@@ -5,11 +5,12 @@ This document is for the real Unitree Z1 arm test, not Gazebo.
 Goal for limited lab time:
 
 1. Start the real Z1 control chain correctly.
-2. Use `computed_pid_friction_model`.
-3. Use the Gazebo-tuned parameters that worked well yesterday.
-4. Use the prehome command often, so every test starts from a known pose.
-5. Manually test J1-J6 joint motions at 5, 10, and 30 deg.
-6. If joint tests are stable, manually test forward pose from 25% to 100%.
+2. Use `computed_pid_friction_model` for the actual joint and forward-pose tests.
+3. Use `augmented_pd_friction_model` for prehome/reset.
+4. Use the Gazebo-tuned parameters that worked well yesterday for the computed-PID tests.
+5. Use the prehome command when needed, so important tests start from a known pose.
+6. Manually test J1-J6 joint motions at 5, 10, and 30 deg.
+7. If joint tests are stable, manually test forward pose from 25% to 100%.
 
 Important assumptions:
 
@@ -18,9 +19,10 @@ Important assumptions:
 - Do **not** use `--gazebo-ports` for real hardware.
 - Keep gripper enabled. Do **not** use `--no-gripper` unless SDK reports gripper connection errors.
 - Use bridge/Python torque limit `"5 8 10 10 3 3"`.
-- These commands use the stronger Gazebo-tuned computed-PID/friction parameters.
+- The joint/forward-pose commands use the stronger Gazebo-tuned computed-PID/friction parameters.
+- The prehome command uses augmented PD with friction/damping compensation.
 
-Gazebo-tuned parameters used here:
+Gazebo-tuned computed-PID parameters used for joint and forward-pose tests:
 
 ```text
 KP       = "64 100 100 60 64 100"
@@ -32,12 +34,23 @@ TAU      = "5 8 10 10 3 3"
 PREHOME  = "0 0 -0.005 -0.074 0 0"
 ```
 
+Prehome/reset parameters:
+
+```text
+controller = augmented_pd_friction_model
+KP         = "20 20 40 15 5 5"
+KD         = "3 3 6 2.5 0.6 0.4"
+DAMPING    = "1 2 1 1 1 1"
+FRICTION   = "1 2 1 1.5 1 1.5"
+TAU        = "5 8 10 10 3 3"
+```
+
 Notes:
 
-- `KI4 = 20` is kept because yesterday J4 negative and forward-pose behavior used the tuned controller style.
+- `KI4 = 20` is kept in the computed-PID tests because yesterday J4 negative and forward-pose behavior used the tuned controller style.
 - `FRICTION` and `DAMPING` are the Gazebo-tuned compensation values. They may not be physically exact for the real arm, but these are the parameters that worked in the simulation tests.
 - Positive J4 was the known difficult direction. Test J4 negative first. Test J4 positive only if time and safety allow.
-- Prehome is important. Run prehome before the first real test, after any failed/ugly motion, and before forward-pose tests.
+- Prehome is important. Run `prehome start` once before the main tests. Run prehome again only if the arm does not return cleanly, after a bad motion, or before forward-pose tests.
 
 ---
 
@@ -110,7 +123,7 @@ Watch the bridge output. It should print a rate. Around 300-500 Hz is acceptable
 
 # Part A: quick sign/safety verification
 
-Run these first, one by one. They use the same tuned parameters, but very small motion.
+Run these first, one by one. They use the tuned computed-PID parameters, but very small motion.
 
 ## A1. J1 +2 deg
 
@@ -210,7 +223,7 @@ Prehome target:
 0 0 -0.005 -0.074 0 0
 ```
 
-Use this after the bridge is running and before important tests. It moves the arm slowly to the same prehome pose used in the Gazebo evaluation.
+Use this after the bridge is running and before important tests. It moves the arm slowly to the same prehome pose used in the Gazebo evaluation. Prehome uses `augmented_pd_friction_model`, not computed PID.
 
 ## B1. Paste this helper once in Terminal 3
 
@@ -224,6 +237,7 @@ prehome() {
   echo
   echo "============================================================"
   echo "REAL Z1 PREHOME"
+  echo "controller = augmented_pd_friction_model"
   echo "target = 0 0 -0.005 -0.074 0 0"
   echo "log=${log}"
   echo "STOP if wrong direction, vibration, sagging, or unexpected motion."
@@ -238,11 +252,9 @@ prehome() {
     --hold-time 3 \
     --no-return-home \
     --duration 16 \
-    --test-controller computed_pid_friction_model \
-    --kp "64 100 100 60 64 100" \
-    --kd "13 16 16 14 13 16" \
-    --ki "0 0 0 20 0 0" \
-    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --test-controller augmented_pd_friction_model \
+    --kp "20 20 40 15 5 5" \
+    --kd "3 3 6 2.5 0.6 0.4" \
     --model-damping "1 2 1 1 1 1" \
     --model-friction "1 2 1 1.5 1 1.5" \
     --tau-limit "5 8 10 10 3 3" \
@@ -257,10 +269,9 @@ prehome() {
 prehome start
 ```
 
-Recommended use:
+Run prehome again only if needed:
 
 ```bash
-prehome before_j1
 prehome after_bad_motion
 prehome before_forward_pose
 ```
@@ -347,7 +358,7 @@ run_joint() {
 
 ## C2. Manual test order
 
-Run one line at a time. Run `prehome ...` between tests if the arm does not return cleanly or before starting a new group.
+Run one line at a time. Run `prehome ...` between tests only if the arm does not return cleanly or before starting a new important group.
 
 ### J1
 
