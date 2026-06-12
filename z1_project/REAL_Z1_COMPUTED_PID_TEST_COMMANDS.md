@@ -6,8 +6,8 @@ Goal for limited lab time:
 
 1. Start the real Z1 control chain correctly.
 2. Use `computed_pid_friction_model`.
-3. First verify J1-J3 with tiny motions.
-4. Then manually test J1-J6 joint motions at 5, 10, and 30 deg.
+3. Use the Gazebo-tuned parameters that worked well yesterday.
+4. Manually test J1-J6 joint motions at 5, 10, and 30 deg.
 5. If joint tests are stable, manually test forward pose from 25% to 100%.
 
 Important assumptions:
@@ -16,9 +16,25 @@ Important assumptions:
 - Real Z1 bridge uses default SDK UDP ports `8071/8072`.
 - Do **not** use `--gazebo-ports` for real hardware.
 - Keep gripper enabled. Do **not** use `--no-gripper` unless SDK reports gripper connection errors.
-- Use torque limit `"5 8 10 10 3 3"`.
-- Start with conservative gains and zero Gazebo friction compensation.
-- These tests are real-hardware bring-up tests, not final performance tuning.
+- Use bridge/Python torque limit `"5 8 10 10 3 3"`.
+- These commands now use the stronger Gazebo-tuned computed-PID/friction parameters.
+
+Gazebo-tuned parameters used here:
+
+```text
+KP       = "64 100 100 60 64 100"
+KD       = "13 16 16 14 13 16"
+KI       = "0 0 0 20 0 0"
+DAMPING  = "1 2 1 1 1 1"
+FRICTION = "1 2 1 1.5 1 1.5"
+TAU      = "5 8 10 10 3 3"
+```
+
+Notes:
+
+- `KI4 = 20` is kept because yesterday J4 negative and forward-pose behavior used the tuned controller style.
+- `FRICTION` and `DAMPING` are the Gazebo-tuned compensation values. They may not be physically exact for the real arm, but these are the parameters that worked in the simulation tests.
+- Positive J4 was the known difficult direction. Test J4 negative first. Test J4 positive only if time and safety allow.
 
 ---
 
@@ -83,33 +99,15 @@ cd /home/icesword/Desktop/torque_control/z1_project/cpp/build
 ./pure_torque_bridge --dt 0.002
 ```
 
-In that fallback case, Python `--tau-limit` is the only clamp, so avoid large motions.
+In that fallback case, Python `--tau-limit` is the only clamp, so watch the motion carefully.
 
 Watch the bridge output. It should print a rate. Around 300-500 Hz is acceptable. If the rate is very low or unstable, stop.
 
 ---
 
-## 4. Shared Python settings
+# Part A: quick sign/safety verification
 
-Use these for the first real tests:
-
-```text
-controller = computed_pid_friction_model
-kp         = "16 16 16 16 5 5"
-kd         = "6 6 6 6 2 2"
-ki         = "0 0 0 0 0 0"
-damping    = "0 0 0 0 0 0"
-friction   = "0 0 0 0 0 0"
-tau-limit  = "5 8 10 10 3 3"
-```
-
-For real first tests, damping/friction are zero because previous friction values were Gazebo compensation values.
-
----
-
-# Part A: first-hand J1-J3 tiny verification
-
-Run these first, one by one. These are just direction/sign/safety checks.
+Run these first, one by one. They use the same tuned parameters, but very small motion.
 
 ## A1. J1 +2 deg
 
@@ -128,14 +126,15 @@ python3 torque_main.py \
   --duration 25 \
   --test-controller computed_pid_friction_model \
   --return-controller computed_pid_friction_model \
-  --kp "16 16 16 16 5 5" \
-  --kd "6 6 6 6 2 2" \
-  --ki "0 0 0 0 0 0" \
-  --model-damping "0 0 0 0 0 0" \
-  --model-friction "0 0 0 0 0 0" \
+  --kp "64 100 100 60 64 100" \
+  --kd "13 16 16 14 13 16" \
+  --ki "0 0 0 20 0 0" \
+  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+  --model-damping "1 2 1 1 1 1" \
+  --model-friction "1 2 1 1.5 1 1.5" \
   --tau-limit "5 8 10 10 3 3" \
   --dynamics-mode analytic \
-  --csv-log logs/real_j1_pos2_first.csv
+  --csv-log logs/real_j1_pos2_tuned_first.csv
 ```
 
 ## A2. J2 +2 deg
@@ -157,14 +156,15 @@ python3 torque_main.py \
   --duration 28 \
   --test-controller computed_pid_friction_model \
   --return-controller computed_pid_friction_model \
-  --kp "16 16 16 16 5 5" \
-  --kd "6 6 6 6 2 2" \
-  --ki "0 0 0 0 0 0" \
-  --model-damping "0 0 0 0 0 0" \
-  --model-friction "0 0 0 0 0 0" \
+  --kp "64 100 100 60 64 100" \
+  --kd "13 16 16 14 13 16" \
+  --ki "0 0 0 20 0 0" \
+  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+  --model-damping "1 2 1 1 1 1" \
+  --model-friction "1 2 1 1.5 1 1.5" \
   --tau-limit "5 8 10 10 3 3" \
   --dynamics-mode analytic \
-  --csv-log logs/real_j2_pos2_first.csv
+  --csv-log logs/real_j2_pos2_tuned_first.csv
 ```
 
 ## A3. J3 -2 deg
@@ -186,14 +186,15 @@ python3 torque_main.py \
   --duration 28 \
   --test-controller computed_pid_friction_model \
   --return-controller computed_pid_friction_model \
-  --kp "16 16 16 16 5 5" \
-  --kd "6 6 6 6 2 2" \
-  --ki "0 0 0 0 0 0" \
-  --model-damping "0 0 0 0 0 0" \
-  --model-friction "0 0 0 0 0 0" \
+  --kp "64 100 100 60 64 100" \
+  --kd "13 16 16 14 13 16" \
+  --ki "0 0 0 20 0 0" \
+  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+  --model-damping "1 2 1 1 1 1" \
+  --model-friction "1 2 1 1.5 1 1.5" \
   --tau-limit "5 8 10 10 3 3" \
   --dynamics-mode analytic \
-  --csv-log logs/real_j3_neg2_first.csv
+  --csv-log logs/real_j3_neg2_tuned_first.csv
 ```
 
 ---
@@ -240,11 +241,11 @@ run_joint() {
     return 1
   fi
 
-  local log="logs/real_j${joint}_${sign_label}deg_computed_pid.csv"
+  local log="logs/real_j${joint}_${sign_label}deg_tuned_computed_pid.csv"
 
   echo
   echo "============================================================"
-  echo "REAL Z1 manual joint test"
+  echo "REAL Z1 manual joint test with Gazebo-tuned parameters"
   echo "joint=${joint}, angle=${angle} deg"
   echo "move_time=${move_time}, return_time=${return_time}, duration=${duration}"
   echo "log=${log}"
@@ -264,11 +265,12 @@ run_joint() {
     --duration "$duration" \
     --test-controller computed_pid_friction_model \
     --return-controller computed_pid_friction_model \
-    --kp "16 16 16 16 5 5" \
-    --kd "6 6 6 6 2 2" \
-    --ki "0 0 0 0 0 0" \
-    --model-damping "0 0 0 0 0 0" \
-    --model-friction "0 0 0 0 0 0" \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2 1 1.5 1 1.5" \
     --tau-limit "5 8 10 10 3 3" \
     --dynamics-mode analytic \
     --csv-log "$log"
@@ -382,11 +384,11 @@ run_forward() {
   local move_time="$3"
   local return_time="$4"
   local duration="$5"
-  local log="logs/real_forward_pose_${scale_label}_computed_pid.csv"
+  local log="logs/real_forward_pose_${scale_label}_tuned_computed_pid.csv"
 
   echo
   echo "============================================================"
-  echo "REAL Z1 manual forward-pose test"
+  echo "REAL Z1 manual forward-pose test with Gazebo-tuned parameters"
   echo "scale=${scale_label}"
   echo "target=${target}"
   echo "log=${log}"
@@ -405,11 +407,12 @@ run_forward() {
     --duration "$duration" \
     --test-controller computed_pid_friction_model \
     --return-controller computed_pid_friction_model \
-    --kp "16 16 16 16 5 5" \
-    --kd "6 6 6 6 2 2" \
-    --ki "0 0 0 0 0 0" \
-    --model-damping "0 0 0 0 0 0" \
-    --model-friction "0 0 0 0 0 0" \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2 1 1.5 1 1.5" \
     --tau-limit "5 8 10 10 3 3" \
     --dynamics-mode analytic \
     --csv-log "$log"
