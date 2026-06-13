@@ -306,3 +306,70 @@ Emergency stop command:
 ```bash
 touch /tmp/z1_torque_$(id -u)/z1_stop.txt
 ```
+
+---
+
+# Appendix: add-on command block only
+
+This section is added so the friction-2.5 CPID test can be copied quickly without changing the rest of the document.
+
+## A. CPID J2/J3 90 deg with J2 friction 2.5
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+python3 torque_main.py \
+  --mode full_pose_absolute \
+  --target "0 1.5708 -1.5708 -0.074 0 0" \
+  --trajectory-profile scurve \
+  --move-time 5 \
+  --hold-time 3 \
+  --return-to-start \
+  --return-time 5 \
+  --duration 15 \
+  --test-controller computed_pid_friction_model \
+  --return-controller computed_pid_friction_model \
+  --kp "64 100 100 60 64 100" \
+  --kd "13 16 16 14 13 16" \
+  --ki "0 0 0 20 0 0" \
+  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+  --model-damping "1 2 1 1 1 1" \
+  --model-friction "1 2.5 1 1.5 1 1.5" \
+  --tau-limit "5 12 12 10 3 3" \
+  --dynamics-mode analytic \
+  --csv-log logs/real_j2j3_90_cpid_fric2p5_5move_3hold_5return.csv
+```
+
+Plot after the test:
+
+```bash
+python3 plot_log.py logs/real_j2j3_90_cpid_fric2p5_5move_3hold_5return.csv
+```
+
+## B. CPID J2 +30 deg check with J2 friction 2.5
+
+```bash
+cd /home/icesword/Desktop/torque_control/z1_project
+
+python3 torque_main.py \
+  --mode one_joint_relative \
+  --joint 2 \
+  --angle-deg 30 \
+  --trajectory-profile scurve \
+  --move-time 5 \
+  --hold-time 3 \
+  --return-to-start \
+  --return-time 5 \
+  --duration 15 \
+  --test-controller computed_pid_friction_model \
+  --return-controller computed_pid_friction_model \
+  --kp "64 100 100 60 64 100" \
+  --kd "13 16 16 14 13 16" \
+  --ki "0 0 0 20 0 0" \
+  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+  --model-damping "1 2 1 1 1 1" \
+  --model-friction "1 2.5 1 1.5 1 1.5" \
+  --tau-limit "5 12 12 10 3 3" \
+  --dynamics-mode analytic \
+  --csv-log logs/real_j2_pos30_cpid_fric2p5_check.csv
+```
