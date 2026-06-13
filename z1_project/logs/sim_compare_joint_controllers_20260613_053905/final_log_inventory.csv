@@ -1,0 +1,6 @@
+controller,controller_label,csv_logs,unique_joint_angle_cases,joint_counts,missing_cases
+augpd_nofric,AugPD no friction,24,24,J1:3;J2:3;J3:3;J4:3;J5:6;J6:6,
+augpd_fric2p5,AugPD friction,24,24,J1:3;J2:3;J3:3;J4:3;J5:6;J6:6,
+computed_torque_baseline,Computed torque baseline,24,24,J1:3;J2:3;J3:3;J4:3;J5:6;J6:6,
+cpid_fric2p5,CPID friction,24,24,J1:3;J2:3;J3:3;J4:3;J5:6;J6:6,
+sdk_lowcmd,Unitree SDK LOWCMD,24,24,J1:3;J2:3;J3:3;J4:3;J5:6;J6:6,

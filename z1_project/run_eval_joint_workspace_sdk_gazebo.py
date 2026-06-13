@@ -16,6 +16,7 @@ and ``lowstate.getTau()`` from feedback.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import csv
 import math
 import signal
@@ -59,6 +60,9 @@ DEFAULT_SDK_KD = np.array([2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0], dtyp
 def load_unitree_interface():
     if str(SDK_LIB) not in sys.path:
         sys.path.insert(0, str(SDK_LIB))
+    sdk_core = SDK_LIB / "libZ1_SDK_x86_64.so"
+    if sdk_core.exists():
+        ctypes.CDLL(str(sdk_core), mode=ctypes.RTLD_GLOBAL)
     try:
         import unitree_arm_interface
     except ImportError as exc:
@@ -106,6 +110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unitree SDK joint-workspace Gazebo baseline", allow_abbrev=False)
     parser.add_argument("--log-dir", default="logs/eval_joint_workspace_sdk")
     parser.add_argument("--move-time", type=float, default=10.0)
+    parser.add_argument("--hold-time", type=float, default=0.0)
     parser.add_argument("--return-time", type=float, default=10.0)
     parser.add_argument("--duration", type=float, default=22.0)
     parser.add_argument("--pause-sec", type=float, default=1.0)
@@ -160,7 +165,14 @@ def desired_for_time(q_start: np.ndarray, q_goal: np.ndarray, elapsed: float, ar
     if elapsed <= args.move_time:
         q_cmd, dq_cmd, ddq_cmd = scurve_trajectory(q_start, q_goal, elapsed, args.move_time)
         return "outbound", q_cmd, dq_cmd, ddq_cmd
-    q_cmd, dq_cmd, ddq_cmd = scurve_trajectory(q_goal, q_start, elapsed - args.move_time, args.return_time)
+    if elapsed <= args.move_time + args.hold_time:
+        return "outbound_hold", q_goal.copy(), np.zeros(NDOF), np.zeros(NDOF)
+    q_cmd, dq_cmd, ddq_cmd = scurve_trajectory(
+        q_goal,
+        q_start,
+        elapsed - args.move_time - args.hold_time,
+        args.return_time,
+    )
     return "return", q_cmd, dq_cmd, ddq_cmd
 
 
@@ -187,9 +199,14 @@ def run_one_test(arm, args, log_dir: Path, joint: int, angle_deg: float, stop_re
     max_abs_tau_sdk_cmd = np.zeros(NDOF)
     max_abs_tau_state = np.zeros(NDOF)
     max_abs_dq_actual = np.zeros(NDOF)
-    sum_sq_error_joint = 0.0
-    final_error = np.zeros(NDOF)
-    final_q = q_start.copy()
+    outbound_sum_sq_error_joint = 0.0
+    outbound_final_error = np.zeros(NDOF)
+    outbound_final_q = q_start.copy()
+    outbound_max_abs_error = np.zeros(NDOF)
+    outbound_max_abs_tau_sdk_cmd = np.zeros(NDOF)
+    outbound_max_abs_tau_state = np.zeros(NDOF)
+    outbound_max_abs_dq_actual = np.zeros(NDOF)
+    outbound_steps = 0
     steps = 0
 
     print(
@@ -250,9 +267,15 @@ def run_one_test(arm, args, log_dir: Path, joint: int, angle_deg: float, stop_re
             max_abs_tau_sdk_cmd = np.maximum(max_abs_tau_sdk_cmd, np.abs(tau_sdk_cmd))
             max_abs_tau_state = np.maximum(max_abs_tau_state, np.abs(tau_state))
             max_abs_dq_actual = np.maximum(max_abs_dq_actual, np.abs(dq_actual))
-            sum_sq_error_joint += float(error[joint_index] ** 2)
-            final_error = error
-            final_q = q_actual
+            if phase == "outbound":
+                outbound_max_abs_error = np.maximum(outbound_max_abs_error, np.abs(error))
+                outbound_max_abs_tau_sdk_cmd = np.maximum(outbound_max_abs_tau_sdk_cmd, np.abs(tau_sdk_cmd))
+                outbound_max_abs_tau_state = np.maximum(outbound_max_abs_tau_state, np.abs(tau_state))
+                outbound_max_abs_dq_actual = np.maximum(outbound_max_abs_dq_actual, np.abs(dq_actual))
+                outbound_sum_sq_error_joint += float(error[joint_index] ** 2)
+                outbound_final_error = error
+                outbound_final_q = q_actual
+                outbound_steps += 1
             steps += 1
 
             next_tick += float(arm._ctrlComp.dt)
@@ -264,16 +287,16 @@ def run_one_test(arm, args, log_dir: Path, joint: int, angle_deg: float, stop_re
 
     wall_elapsed = max(time.perf_counter() - wall_start, 1e-9)
     desired_delta = q_goal[joint_index] - q_start[joint_index]
-    actual_delta = final_q[joint_index] - q_start[joint_index]
+    actual_delta = outbound_final_q[joint_index] - q_start[joint_index]
     achieved_pct = 100.0 * actual_delta / desired_delta if abs(desired_delta) > 1e-12 else float("nan")
-    rms_error = math.sqrt(sum_sq_error_joint / max(steps, 1))
+    rms_error = math.sqrt(outbound_sum_sq_error_joint / max(outbound_steps, 1))
 
     print(
         f"  achieved={achieved_pct:.2f}% "
-        f"final_err={math.degrees(final_error[joint_index]):+.3f} deg "
-        f"max_err={math.degrees(max_abs_error[joint_index]):.3f} deg "
-        f"max_tau_cmd={max_abs_tau_sdk_cmd[joint_index]:.3f} "
-        f"max_tau_state={max_abs_tau_state[joint_index]:.3f}"
+        f"final_err={math.degrees(outbound_final_error[joint_index]):+.3f} deg "
+        f"max_err={math.degrees(outbound_max_abs_error[joint_index]):.3f} deg "
+        f"max_tau_cmd={outbound_max_abs_tau_sdk_cmd[joint_index]:.3f} "
+        f"max_tau_state={outbound_max_abs_tau_state[joint_index]:.3f}"
     )
 
     if args.pause_sec > 0.0:
@@ -284,16 +307,17 @@ def run_one_test(arm, args, log_dir: Path, joint: int, angle_deg: float, stop_re
         "joint": joint,
         "angle_deg": angle_deg,
         "steps": steps,
+        "outbound_steps": outbound_steps,
         "effective_loop_rate_hz": steps / wall_elapsed,
         "desired_delta_deg": math.degrees(desired_delta),
         "actual_delta_deg": math.degrees(actual_delta),
         "achieved_pct": achieved_pct,
-        "final_error_deg": math.degrees(final_error[joint_index]),
-        "max_abs_error_deg": math.degrees(max_abs_error[joint_index]),
+        "final_error_deg": math.degrees(outbound_final_error[joint_index]),
+        "max_abs_error_deg": math.degrees(outbound_max_abs_error[joint_index]),
         "rms_error_deg": math.degrees(rms_error),
-        "max_abs_tau_sdk_cmd": max_abs_tau_sdk_cmd[joint_index],
-        "max_abs_tau_state": max_abs_tau_state[joint_index],
-        "max_abs_dq_actual": max_abs_dq_actual[joint_index],
+        "max_abs_tau_sdk_cmd": outbound_max_abs_tau_sdk_cmd[joint_index],
+        "max_abs_tau_state": outbound_max_abs_tau_state[joint_index],
+        "max_abs_dq_actual": outbound_max_abs_dq_actual[joint_index],
     }
 
 
@@ -301,8 +325,10 @@ def main() -> int:
     args = build_arg_parser().parse_args()
     if args.move_time <= 0.0 or args.return_time <= 0.0:
         raise ValueError("--move-time and --return-time must be positive")
-    if args.duration < args.move_time + args.return_time:
-        raise ValueError("--duration must be at least --move-time + --return-time")
+    if args.hold_time < 0.0:
+        raise ValueError("--hold-time must be non-negative")
+    if args.duration < args.move_time + args.hold_time + args.return_time:
+        raise ValueError("--duration must be at least --move-time + --hold-time + --return-time")
     if args.pause_sec < 0.0:
         raise ValueError("--pause-sec must be non-negative")
     if args.joint is not None and not 1 <= int(args.joint) <= NDOF:
@@ -357,6 +383,7 @@ def main() -> int:
                 "joint",
                 "angle_deg",
                 "steps",
+                "outbound_steps",
                 "effective_loop_rate_hz",
                 "desired_delta_deg",
                 "actual_delta_deg",

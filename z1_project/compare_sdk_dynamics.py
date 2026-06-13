@@ -16,6 +16,7 @@ Run from z1_project:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import sys
 from pathlib import Path
 
@@ -28,10 +29,15 @@ SDK_LIB = ROOT / "z1_sdk" / "lib"
 if str(SDK_LIB) not in sys.path:
     sys.path.insert(0, str(SDK_LIB))
 
-try:
-    import unitree_arm_interface
-except ImportError as exc:  # pragma: no cover - depends on local SDK binary
-    raise SystemExit(f"failed to import Unitree SDK Python module from {SDK_LIB}: {exc}") from exc
+def load_unitree_interface():
+    sdk_core = SDK_LIB / "libZ1_SDK_x86_64.so"
+    if sdk_core.exists():
+        ctypes.CDLL(str(sdk_core), mode=ctypes.RTLD_GLOBAL)
+    try:
+        import unitree_arm_interface
+    except ImportError as exc:  # pragma: no cover - depends on local SDK binary
+        raise SystemExit(f"failed to import Unitree SDK Python module from {SDK_LIB}: {exc}") from exc
+    return unitree_arm_interface
 
 
 def parse_vec6(text: str) -> np.ndarray:
@@ -108,6 +114,7 @@ def main() -> int:
     ddq = args.ddq.astype(float)
     has_gripper = not args.sdk_no_gripper
 
+    unitree_arm_interface = load_unitree_interface()
     arm = unitree_arm_interface.ArmInterface(hasGripper=has_gripper)
     model = arm._ctrlComp.armModel
 
