@@ -2,41 +2,37 @@
 
 This document is for the real Unitree Z1 arm test, not Gazebo.
 
-Today's main goal:
+Goal for lab time:
 
-1. Use `computed_pid_friction_model` as the studied controller.
-2. Use the tuned real-arm J2 friction value `2.5`.
-3. Test the feasible 90 deg motion: J2 +90 deg together with J3 -90 deg.
-4. Keep augmented PD only for prehome/reset.
+1. Start the real Z1 control chain correctly.
+2. Use `computed_pid_friction_model` as the studied controller.
+3. Use `augmented_pd_friction_model` only for prehome/reset.
+4. Keep flexible helpers so any single joint or any full pose can be tested by hand.
+5. Use the real-arm tuned J2 friction value `2.5` for CPID tests.
 
-Important result from yesterday:
-
-- J2 +90 deg alone can hit the ground, so it is not a good test.
-- Test J2 as a coordinated motion with J3: `J2 = +90 deg`, `J3 = -90 deg`.
-- For CPID, J2 friction `2.0` was too small, `3.0` was too large/aggressive, and `2.5` worked well.
-
-Tuned CPID parameters for today's main test:
+Important current tuning:
 
 ```text
-controller = computed_pid_friction_model
-KP         = "64 100 100 60 64 100"
-KD         = "13 16 16 14 13 16"
-KI         = "0 0 0 20 0 0"
-DAMPING    = "1 2 1 1 1 1"
-FRICTION   = "1 2.5 1 1.5 1 1.5"
-TAU        = "5 12 12 10 3 3"
+CPID KP       = "64 100 100 60 64 100"
+CPID KD       = "13 16 16 14 13 16"
+CPID KI       = "0 0 0 20 0 0"
+DAMPING       = "1 2 1 1 1 1"
+FRICTION      = "1 2.5 1 1.5 1 1.5"
+TAU           = "5 12 12 10 3 3"
+PREHOME       = "0 0 -0.005 -0.074 0 0"
 ```
 
-Prehome/reset still uses augmented PD:
+Why J2 friction is `2.5`:
+
+- J2 friction `2.0` was too small and J2 got stuck during return.
+- J2 friction `3.0` was too aggressive / too large for torque output.
+- J2 friction `2.5` worked well for the real-arm CPID J2/J3 motion.
+
+Do **not** test J2 +90 deg alone. It can hit the ground. For 90 deg J2 motion, use coordinated J2/J3:
 
 ```text
-controller = augmented_pd_friction_model
-KP         = "20 20 40 15 5 5"
-KD         = "3 3 6 2.5 0.6 0.4"
-DAMPING    = "1 2 1 1 1 1"
-FRICTION   = "1 2.5 1 1.5 1 1.5"
-TAU        = "5 12 12 10 3 3"
-PREHOME    = "0 0 -0.005 -0.074 0 0"
+J2 = +90 deg, J3 = -90 deg
+Target = "0 1.5708 -1.5708 -0.074 0 0"
 ```
 
 ---
@@ -49,11 +45,13 @@ Keep this ready in a separate terminal:
 touch /tmp/z1_torque_$(id -u)/z1_stop.txt
 ```
 
-Also be ready to press `Ctrl+C` in the Python terminal and the bridge terminal.
+Also be ready to press `Ctrl+C` in the Python terminal and bridge terminal.
 
 ---
 
 ## 1. Terminal 0: check real robot network
+
+The host must be on the robot subnet `192.168.123.x`.
 
 ```bash
 ping -c 3 192.168.123.110
@@ -106,7 +104,7 @@ Watch the bridge output. Around 300-500 Hz is acceptable. If the rate is very lo
 
 ---
 
-## 4. Close visualizers before final test
+## 4. Close visualizers before final logged test
 
 Visualization can reduce loop rate. For final logged tests, close RViz/Gazebo/Gazebo client first:
 
@@ -118,7 +116,9 @@ Then run only the controller terminals.
 
 ---
 
-# Part A: paste helpers in Terminal 3
+# Part A: paste flexible helpers once in Terminal 3
+
+These helpers are the main part. They give freedom to test any single joint, any full pose with return, and any full pose without return.
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -155,63 +155,38 @@ prehome() {
     --csv-log "$log"
 }
 
-run_cpid_j2j3_90() {
-  local label="${1:-real_j2j3_90_cpid_fric2p5}"
+run_joint() {
+  local joint="$1"
+  local angle="$2"
+  local label="${3:-j${joint}_${angle}deg_cpid_fric2p5}"
+  local move_time="${4:-5}"
+  local hold_time="${5:-3}"
+  local return_time="${6:-5}"
+  local duration="${7:-15}"
+  local log="logs/real_${label}.csv"
 
   echo
   echo "============================================================"
-  echo "REAL Z1 CPID FRICTION TEST: J2 +90 deg, J3 -90 deg"
-  echo "controller = computed_pid_friction_model"
-  echo "friction = 1 2.5 1 1.5 1 1.5"
-  echo "tau-limit = 5 12 12 10 3 3"
-  echo "log=logs/${label}.csv"
+  echo "REAL Z1 CPID SINGLE-JOINT TEST"
+  echo "joint=${joint}, angle=${angle} deg"
+  echo "move_time=${move_time}, hold_time=${hold_time}, return_time=${return_time}, duration=${duration}"
+  echo "controller=computed_pid_friction_model"
+  echo "friction=1 2.5 1 1.5 1 1.5"
+  echo "log=${log}"
   echo "STOP if wrong direction, vibration, contact, or unexpected motion."
   echo "============================================================"
-  read -p "Press Enter to start J2/J3 90 CPID test, or Ctrl+C to abort..."
-
-  python3 torque_main.py \
-    --mode full_pose_absolute \
-    --target "0 1.5708 -1.5708 -0.074 0 0" \
-    --trajectory-profile scurve \
-    --move-time 5 \
-    --hold-time 3 \
-    --return-to-start \
-    --return-time 5 \
-    --duration 15 \
-    --test-controller computed_pid_friction_model \
-    --return-controller computed_pid_friction_model \
-    --kp "64 100 100 60 64 100" \
-    --kd "13 16 16 14 13 16" \
-    --ki "0 0 0 20 0 0" \
-    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-    --model-damping "1 2 1 1 1 1" \
-    --model-friction "1 2.5 1 1.5 1 1.5" \
-    --tau-limit "5 12 12 10 3 3" \
-    --dynamics-mode analytic \
-    --csv-log "logs/${label}.csv"
-}
-
-run_cpid_j2_30_check() {
-  local label="${1:-real_j2_pos30_cpid_fric2p5_check}"
-
-  echo
-  echo "============================================================"
-  echo "REAL Z1 CPID SANITY CHECK: J2 +30 deg"
-  echo "This is only a quick check before J2/J3 90."
-  echo "log=logs/${label}.csv"
-  echo "============================================================"
-  read -p "Press Enter to start J2 +30 check, or Ctrl+C to abort..."
+  read -p "Press Enter to start this single-joint test, or Ctrl+C to abort..."
 
   python3 torque_main.py \
     --mode one_joint_relative \
-    --joint 2 \
-    --angle-deg 30 \
+    --joint "$joint" \
+    --angle-deg "$angle" \
     --trajectory-profile scurve \
-    --move-time 5 \
-    --hold-time 3 \
+    --move-time "$move_time" \
+    --hold-time "$hold_time" \
     --return-to-start \
-    --return-time 5 \
-    --duration 15 \
+    --return-time "$return_time" \
+    --duration "$duration" \
     --test-controller computed_pid_friction_model \
     --return-controller computed_pid_friction_model \
     --kp "64 100 100 60 64 100" \
@@ -222,10 +197,93 @@ run_cpid_j2_30_check() {
     --model-friction "1 2.5 1 1.5 1 1.5" \
     --tau-limit "5 12 12 10 3 3" \
     --dynamics-mode analytic \
-    --csv-log "logs/${label}.csv"
+    --csv-log "$log"
 }
 
-plot_last() {
+run_pose() {
+  local label="$1"
+  local target="$2"
+  local move_time="${3:-5}"
+  local hold_time="${4:-3}"
+  local return_time="${5:-5}"
+  local duration="${6:-15}"
+  local log="logs/real_${label}.csv"
+
+  echo
+  echo "============================================================"
+  echo "REAL Z1 CPID FULL-POSE TEST WITH RETURN"
+  echo "target=${target}"
+  echo "move_time=${move_time}, hold_time=${hold_time}, return_time=${return_time}, duration=${duration}"
+  echo "controller=computed_pid_friction_model"
+  echo "friction=1 2.5 1 1.5 1 1.5"
+  echo "log=${log}"
+  echo "STOP if wrong direction, vibration, contact, or unexpected motion."
+  echo "============================================================"
+  read -p "Press Enter to start this pose test, or Ctrl+C to abort..."
+
+  python3 torque_main.py \
+    --mode full_pose_absolute \
+    --target "$target" \
+    --trajectory-profile scurve \
+    --move-time "$move_time" \
+    --hold-time "$hold_time" \
+    --return-to-start \
+    --return-time "$return_time" \
+    --duration "$duration" \
+    --test-controller computed_pid_friction_model \
+    --return-controller computed_pid_friction_model \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2.5 1 1.5 1 1.5" \
+    --tau-limit "5 12 12 10 3 3" \
+    --dynamics-mode analytic \
+    --csv-log "$log"
+}
+
+move_pose() {
+  local label="$1"
+  local target="$2"
+  local move_time="${3:-8}"
+  local hold_time="${4:-5}"
+  local duration="${5:-15}"
+  local log="logs/real_${label}.csv"
+
+  echo
+  echo "============================================================"
+  echo "REAL Z1 CPID MOVE TO POSE, NO RETURN"
+  echo "target=${target}"
+  echo "move_time=${move_time}, hold_time=${hold_time}, duration=${duration}"
+  echo "controller=computed_pid_friction_model"
+  echo "friction=1 2.5 1 1.5 1 1.5"
+  echo "log=${log}"
+  echo "STOP if wrong direction, vibration, contact, or unexpected motion."
+  echo "============================================================"
+  read -p "Press Enter to move to this pose, or Ctrl+C to abort..."
+
+  python3 torque_main.py \
+    --mode full_pose_absolute \
+    --target "$target" \
+    --trajectory-profile scurve \
+    --move-time "$move_time" \
+    --hold-time "$hold_time" \
+    --no-return-home \
+    --duration "$duration" \
+    --test-controller computed_pid_friction_model \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2.5 1 1.5 1 1.5" \
+    --tau-limit "5 12 12 10 3 3" \
+    --dynamics-mode analytic \
+    --csv-log "$log"
+}
+
+plot_log_file() {
   local csv="$1"
   python3 plot_log.py "$csv"
   echo "plots written to logs/plots"
@@ -234,54 +292,104 @@ plot_last() {
 
 ---
 
-# Part B: recommended run order today
+# Part B: how to use the helpers
 
-Run prehome first:
+## B1. Reset/prehome
 
 ```bash
 prehome start
 ```
 
-Optional quick sanity check for J2 +30:
+Run prehome again only after bad motion or before an important new group:
 
 ```bash
-run_cpid_j2_30_check real_j2_pos30_cpid_fric2p5_check
-python3 plot_log.py logs/real_j2_pos30_cpid_fric2p5_check.csv
+prehome after_bad_motion
+prehome before_forward_pose
 ```
 
-Main professor-goal test, CPID with J2 friction 2.5:
+## B2. Single-joint tests
+
+Format:
 
 ```bash
-run_cpid_j2j3_90 real_j2j3_90_cpid_fric2p5_5move_3hold_5return
+run_joint JOINT ANGLE_DEG LABEL MOVE_TIME HOLD_TIME RETURN_TIME DURATION
+```
+
+Examples:
+
+```bash
+run_joint 1 30  j1_pos30_cpid_fric2p5 5 3 5 15
+run_joint 2 30  j2_pos30_cpid_fric2p5 5 3 5 15
+run_joint 3 -30 j3_neg30_cpid_fric2p5 5 3 5 15
+run_joint 4 -30 j4_neg30_cpid_fric2p5 5 3 5 15
+run_joint 5 30  j5_pos30_cpid_fric2p5 5 3 5 15
+run_joint 6 30  j6_pos30_cpid_fric2p5 5 3 5 15
+```
+
+Plot example:
+
+```bash
+python3 plot_log.py logs/real_j2_pos30_cpid_fric2p5.csv
+```
+
+Do **not** run J2 +90 as a single-joint test. Use the J2/J3 pose test below.
+
+## B3. Arbitrary full-pose test with return
+
+Format:
+
+```bash
+run_pose LABEL "q1 q2 q3 q4 q5 q6" MOVE_TIME HOLD_TIME RETURN_TIME DURATION
+```
+
+Main J2/J3 90 deg test:
+
+```bash
+run_pose j2j3_90_cpid_fric2p5_5move_3hold_5return "0 1.5708 -1.5708 -0.074 0 0" 5 3 5 15
 python3 plot_log.py logs/real_j2j3_90_cpid_fric2p5_5move_3hold_5return.csv
 ```
 
-If the arm does not return cleanly or you want to reset before another test:
+Forward-pose examples:
 
 ```bash
-prehome after_j2j3
+run_pose forward_25pct_cpid_fric2p5  "0 0.375 -0.25 -0.135 0 0" 20 3 20 48
+run_pose forward_50pct_cpid_fric2p5  "0 0.750 -0.50 -0.270 0 0" 20 3 20 48
+run_pose forward_75pct_cpid_fric2p5  "0 1.125 -0.75 -0.405 0 0" 20 3 20 48
+run_pose forward_100pct_cpid_fric2p5 "0 1.500 -1.00 -0.540 0 0" 25 3 25 58
+```
+
+## B4. Move to a chosen pose without return
+
+Use this when you want to move to a certain pose and hold there, not immediately return.
+
+Format:
+
+```bash
+move_pose LABEL "q1 q2 q3 q4 q5 q6" MOVE_TIME HOLD_TIME DURATION
+```
+
+Examples:
+
+```bash
+move_pose check_pose_1 "0 0.4 0 -0.074 0 0" 8 5 15
+move_pose check_j2j3_shape "0 1.5708 -1.5708 -0.074 0 0" 8 5 15
 ```
 
 ---
 
-# Part C: success criteria
+# Part C: latest good result to compare against
 
-The latest good result with friction2 = 2.5 had approximately:
-
-```text
-J2 max tracking error ≈ 0.087 rad = 5.0 deg
-J2 final error        ≈ 0.053 rad = 3.0 deg
-J3 max tracking error ≈ 0.055 rad = 3.2 deg
-J3 final error        ≈ 0.0008 rad
-max tau2              ≈ 11.05 Nm under 12 Nm limit
-max tau3              ≈ 10.07 Nm under 12 Nm limit
-loop rate             ≈ 349 Hz
-```
-
-This is the current best real-arm CPID-friction result for:
+The good real-arm CPID result with J2 friction 2.5 was approximately:
 
 ```text
-J2 +90 deg, J3 -90 deg, 5 s move, 3 s hold, 5 s return
+Target                = "0 1.5708 -1.5708 -0.074 0 0"
+J2 max tracking error = 0.087 rad = 5.0 deg
+J2 final error        = 0.053 rad = 3.0 deg
+J3 max tracking error = 0.055 rad = 3.2 deg
+J3 final error        = 0.0008 rad
+max tau2              = 11.05 Nm under 12 Nm limit
+max tau3              = 10.07 Nm under 12 Nm limit
+loop rate             = 349 Hz
 ```
 
 ---
@@ -305,71 +413,4 @@ Emergency stop command:
 
 ```bash
 touch /tmp/z1_torque_$(id -u)/z1_stop.txt
-```
-
----
-
-# Appendix: add-on command block only
-
-This section is added so the friction-2.5 CPID test can be copied quickly without changing the rest of the document.
-
-## A. CPID J2/J3 90 deg with J2 friction 2.5
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-python3 torque_main.py \
-  --mode full_pose_absolute \
-  --target "0 1.5708 -1.5708 -0.074 0 0" \
-  --trajectory-profile scurve \
-  --move-time 5 \
-  --hold-time 3 \
-  --return-to-start \
-  --return-time 5 \
-  --duration 15 \
-  --test-controller computed_pid_friction_model \
-  --return-controller computed_pid_friction_model \
-  --kp "64 100 100 60 64 100" \
-  --kd "13 16 16 14 13 16" \
-  --ki "0 0 0 20 0 0" \
-  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-  --model-damping "1 2 1 1 1 1" \
-  --model-friction "1 2.5 1 1.5 1 1.5" \
-  --tau-limit "5 12 12 10 3 3" \
-  --dynamics-mode analytic \
-  --csv-log logs/real_j2j3_90_cpid_fric2p5_5move_3hold_5return.csv
-```
-
-Plot after the test:
-
-```bash
-python3 plot_log.py logs/real_j2j3_90_cpid_fric2p5_5move_3hold_5return.csv
-```
-
-## B. CPID J2 +30 deg check with J2 friction 2.5
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-python3 torque_main.py \
-  --mode one_joint_relative \
-  --joint 2 \
-  --angle-deg 30 \
-  --trajectory-profile scurve \
-  --move-time 5 \
-  --hold-time 3 \
-  --return-to-start \
-  --return-time 5 \
-  --duration 15 \
-  --test-controller computed_pid_friction_model \
-  --return-controller computed_pid_friction_model \
-  --kp "64 100 100 60 64 100" \
-  --kd "13 16 16 14 13 16" \
-  --ki "0 0 0 20 0 0" \
-  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-  --model-damping "1 2 1 1 1 1" \
-  --model-friction "1 2.5 1 1.5 1 1.5" \
-  --tau-limit "5 12 12 10 3 3" \
-  --dynamics-mode analytic \
-  --csv-log logs/real_j2_pos30_cpid_fric2p5_check.csv
 ```
