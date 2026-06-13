@@ -2,55 +2,42 @@
 
 This document is for the real Unitree Z1 arm test, not Gazebo.
 
-Goal for limited lab time:
+Today's main goal:
 
-1. Start the real Z1 control chain correctly.
-2. Use `computed_pid_friction_model` for the actual joint and forward-pose tests.
-3. Use `augmented_pd_friction_model` for prehome/reset.
-4. Use the Gazebo-tuned parameters that worked well yesterday for the computed-PID tests.
-5. Use the prehome command when needed, so important tests start from a known pose.
-6. Manually test J1-J6 joint motions at 5, 10, and 30 deg.
-7. If joint tests are stable, manually test forward pose from 25% to 100%.
+1. Use `computed_pid_friction_model` as the studied controller.
+2. Use the tuned real-arm J2 friction value `2.5`.
+3. Test the feasible 90 deg motion: J2 +90 deg together with J3 -90 deg.
+4. Keep augmented PD only for prehome/reset.
 
-Important assumptions:
+Important result from yesterday:
 
-- Real Z1 uses `z1_ctrl`, not `sim_ctrl`.
-- Real Z1 bridge uses default SDK UDP ports `8071/8072`.
-- Do **not** use `--gazebo-ports` for real hardware.
-- Keep gripper enabled. Do **not** use `--no-gripper` unless SDK reports gripper connection errors.
-- Use bridge/Python torque limit `"5 8 10 10 3 3"`.
-- The joint/forward-pose commands use the stronger Gazebo-tuned computed-PID/friction parameters.
-- The prehome command uses augmented PD with friction/damping compensation.
+- J2 +90 deg alone can hit the ground, so it is not a good test.
+- Test J2 as a coordinated motion with J3: `J2 = +90 deg`, `J3 = -90 deg`.
+- For CPID, J2 friction `2.0` was too small, `3.0` was too large/aggressive, and `2.5` worked well.
 
-Gazebo-tuned computed-PID parameters used for joint and forward-pose tests:
+Tuned CPID parameters for today's main test:
 
 ```text
-KP       = "64 100 100 60 64 100"
-KD       = "13 16 16 14 13 16"
-KI       = "0 0 0 20 0 0"
-DAMPING  = "1 2 1 1 1 1"
-FRICTION = "1 2 1 1.5 1 1.5"
-TAU      = "5 8 10 10 3 3"
-PREHOME  = "0 0 -0.005 -0.074 0 0"
+controller = computed_pid_friction_model
+KP         = "64 100 100 60 64 100"
+KD         = "13 16 16 14 13 16"
+KI         = "0 0 0 20 0 0"
+DAMPING    = "1 2 1 1 1 1"
+FRICTION   = "1 2.5 1 1.5 1 1.5"
+TAU        = "5 12 12 10 3 3"
 ```
 
-Prehome/reset parameters:
+Prehome/reset still uses augmented PD:
 
 ```text
 controller = augmented_pd_friction_model
 KP         = "20 20 40 15 5 5"
 KD         = "3 3 6 2.5 0.6 0.4"
 DAMPING    = "1 2 1 1 1 1"
-FRICTION   = "1 2 1 1.5 1 1.5"
-TAU        = "5 8 10 10 3 3"
+FRICTION   = "1 2.5 1 1.5 1 1.5"
+TAU        = "5 12 12 10 3 3"
+PREHOME    = "0 0 -0.005 -0.074 0 0"
 ```
-
-Notes:
-
-- `KI4 = 20` is kept in the computed-PID tests because yesterday J4 negative and forward-pose behavior used the tuned controller style.
-- `FRICTION` and `DAMPING` are the Gazebo-tuned compensation values. They may not be physically exact for the real arm, but these are the parameters that worked in the simulation tests.
-- Positive J4 was the known difficult direction. Test J4 negative first. Test J4 positive only if time and safety allow.
-- Prehome is important. Run `prehome start` once before the main tests. Run prehome again only if the arm does not return cleanly, after a bad motion, or before forward-pose tests.
 
 ---
 
@@ -67,8 +54,6 @@ Also be ready to press `Ctrl+C` in the Python terminal and the bridge terminal.
 ---
 
 ## 1. Terminal 0: check real robot network
-
-The host must be on the robot subnet `192.168.123.x`.
 
 ```bash
 ping -c 3 192.168.123.110
@@ -100,7 +85,7 @@ cd /home/icesword/Desktop/torque_control/z1_project/cpp/build
 
 ./pure_torque_bridge \
   --dt 0.002 \
-  --tau-limit "5 8 10 10 3 3" \
+  --tau-limit "5 12 12 10 3 3" \
   --max-command-age-ms 200
 ```
 
@@ -117,115 +102,23 @@ cd /home/icesword/Desktop/torque_control/z1_project/cpp/build
 
 In that fallback case, Python `--tau-limit` is the only clamp, so watch the motion carefully.
 
-Watch the bridge output. It should print a rate. Around 300-500 Hz is acceptable. If the rate is very low or unstable, stop.
+Watch the bridge output. Around 300-500 Hz is acceptable. If the rate is very low or unstable, stop.
 
 ---
 
-# Part A: quick sign/safety verification
+## 4. Close visualizers before final test
 
-Run these first, one by one. They use the tuned computed-PID parameters, but very small motion.
-
-## A1. J1 +2 deg
+Visualization can reduce loop rate. For final logged tests, close RViz/Gazebo/Gazebo client first:
 
 ```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-python3 torque_main.py \
-  --mode one_joint_relative \
-  --joint 1 \
-  --angle-deg 2 \
-  --trajectory-profile scurve \
-  --move-time 8 \
-  --hold-time 3 \
-  --return-to-start \
-  --return-time 8 \
-  --duration 25 \
-  --test-controller computed_pid_friction_model \
-  --return-controller computed_pid_friction_model \
-  --kp "64 100 100 60 64 100" \
-  --kd "13 16 16 14 13 16" \
-  --ki "0 0 0 20 0 0" \
-  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-  --model-damping "1 2 1 1 1 1" \
-  --model-friction "1 2 1 1.5 1 1.5" \
-  --tau-limit "5 8 10 10 3 3" \
-  --dynamics-mode analytic \
-  --csv-log logs/real_j1_pos2_tuned_first.csv
+killall -9 rviz gzclient gzserver gazebo 2>/dev/null
 ```
 
-## A2. J2 +2 deg
-
-Only run this after J1 is correct.
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-python3 torque_main.py \
-  --mode one_joint_relative \
-  --joint 2 \
-  --angle-deg 2 \
-  --trajectory-profile scurve \
-  --move-time 10 \
-  --hold-time 3 \
-  --return-to-start \
-  --return-time 10 \
-  --duration 28 \
-  --test-controller computed_pid_friction_model \
-  --return-controller computed_pid_friction_model \
-  --kp "64 100 100 60 64 100" \
-  --kd "13 16 16 14 13 16" \
-  --ki "0 0 0 20 0 0" \
-  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-  --model-damping "1 2 1 1 1 1" \
-  --model-friction "1 2 1 1.5 1 1.5" \
-  --tau-limit "5 8 10 10 3 3" \
-  --dynamics-mode analytic \
-  --csv-log logs/real_j2_pos2_tuned_first.csv
-```
-
-## A3. J3 -2 deg
-
-Only run this after J1 and J2 are correct.
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-python3 torque_main.py \
-  --mode one_joint_relative \
-  --joint 3 \
-  --angle-deg -2 \
-  --trajectory-profile scurve \
-  --move-time 10 \
-  --hold-time 3 \
-  --return-to-start \
-  --return-time 10 \
-  --duration 28 \
-  --test-controller computed_pid_friction_model \
-  --return-controller computed_pid_friction_model \
-  --kp "64 100 100 60 64 100" \
-  --kd "13 16 16 14 13 16" \
-  --ki "0 0 0 20 0 0" \
-  --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-  --model-damping "1 2 1 1 1 1" \
-  --model-friction "1 2 1 1.5 1 1.5" \
-  --tau-limit "5 8 10 10 3 3" \
-  --dynamics-mode analytic \
-  --csv-log logs/real_j3_neg2_tuned_first.csv
-```
+Then run only the controller terminals.
 
 ---
 
-# Part B: manual prehome command
-
-Prehome target:
-
-```text
-0 0 -0.005 -0.074 0 0
-```
-
-Use this after the bridge is running and before important tests. It moves the arm slowly to the same prehome pose used in the Gazebo evaluation. Prehome uses `augmented_pd_friction_model`, not computed PID.
-
-## B1. Paste this helper once in Terminal 3
+# Part A: paste helpers in Terminal 3
 
 ```bash
 cd /home/icesword/Desktop/torque_control/z1_project
@@ -256,259 +149,139 @@ prehome() {
     --kp "20 20 40 15 5 5" \
     --kd "3 3 6 2.5 0.6 0.4" \
     --model-damping "1 2 1 1 1 1" \
-    --model-friction "1 2 1 1.5 1 1.5" \
-    --tau-limit "5 8 10 10 3 3" \
+    --model-friction "1 2.5 1 1.5 1 1.5" \
+    --tau-limit "5 12 12 10 3 3" \
     --dynamics-mode analytic \
     --csv-log "$log"
 }
+
+run_cpid_j2j3_90() {
+  local label="${1:-real_j2j3_90_cpid_fric2p5}"
+
+  echo
+  echo "============================================================"
+  echo "REAL Z1 CPID FRICTION TEST: J2 +90 deg, J3 -90 deg"
+  echo "controller = computed_pid_friction_model"
+  echo "friction = 1 2.5 1 1.5 1 1.5"
+  echo "tau-limit = 5 12 12 10 3 3"
+  echo "log=logs/${label}.csv"
+  echo "STOP if wrong direction, vibration, contact, or unexpected motion."
+  echo "============================================================"
+  read -p "Press Enter to start J2/J3 90 CPID test, or Ctrl+C to abort..."
+
+  python3 torque_main.py \
+    --mode full_pose_absolute \
+    --target "0 1.5708 -1.5708 -0.074 0 0" \
+    --trajectory-profile scurve \
+    --move-time 5 \
+    --hold-time 3 \
+    --return-to-start \
+    --return-time 5 \
+    --duration 15 \
+    --test-controller computed_pid_friction_model \
+    --return-controller computed_pid_friction_model \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2.5 1 1.5 1 1.5" \
+    --tau-limit "5 12 12 10 3 3" \
+    --dynamics-mode analytic \
+    --csv-log "logs/${label}.csv"
+}
+
+run_cpid_j2_30_check() {
+  local label="${1:-real_j2_pos30_cpid_fric2p5_check}"
+
+  echo
+  echo "============================================================"
+  echo "REAL Z1 CPID SANITY CHECK: J2 +30 deg"
+  echo "This is only a quick check before J2/J3 90."
+  echo "log=logs/${label}.csv"
+  echo "============================================================"
+  read -p "Press Enter to start J2 +30 check, or Ctrl+C to abort..."
+
+  python3 torque_main.py \
+    --mode one_joint_relative \
+    --joint 2 \
+    --angle-deg 30 \
+    --trajectory-profile scurve \
+    --move-time 5 \
+    --hold-time 3 \
+    --return-to-start \
+    --return-time 5 \
+    --duration 15 \
+    --test-controller computed_pid_friction_model \
+    --return-controller computed_pid_friction_model \
+    --kp "64 100 100 60 64 100" \
+    --kd "13 16 16 14 13 16" \
+    --ki "0 0 0 20 0 0" \
+    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
+    --model-damping "1 2 1 1 1 1" \
+    --model-friction "1 2.5 1 1.5 1 1.5" \
+    --tau-limit "5 12 12 10 3 3" \
+    --dynamics-mode analytic \
+    --csv-log "logs/${label}.csv"
+}
+
+plot_last() {
+  local csv="$1"
+  python3 plot_log.py "$csv"
+  echo "plots written to logs/plots"
+}
 ```
 
-## B2. Run prehome by hand
+---
+
+# Part B: recommended run order today
+
+Run prehome first:
 
 ```bash
 prehome start
 ```
 
-Run prehome again only if needed:
+Optional quick sanity check for J2 +30:
 
 ```bash
-prehome after_bad_motion
-prehome before_forward_pose
+run_cpid_j2_30_check real_j2_pos30_cpid_fric2p5_check
+python3 plot_log.py logs/real_j2_pos30_cpid_fric2p5_check.csv
+```
+
+Main professor-goal test, CPID with J2 friction 2.5:
+
+```bash
+run_cpid_j2j3_90 real_j2j3_90_cpid_fric2p5_5move_3hold_5return
+python3 plot_log.py logs/real_j2j3_90_cpid_fric2p5_5move_3hold_5return.csv
+```
+
+If the arm does not return cleanly or you want to reset before another test:
+
+```bash
+prehome after_j2j3
 ```
 
 ---
 
-# Part C: manual J1-J6 joint tests at 5, 10, 30 deg
+# Part C: success criteria
 
-This part is **by hand**. Paste the helper function once, then run one `run_joint ...` line at a time.
-
-Do not run the entire list blindly. After each line, watch the arm and check the terminal output.
-
-## C1. Paste this helper once in Terminal 3
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-run_joint() {
-  local joint="$1"
-  local angle="$2"
-
-  local abs_angle="${angle#-}"
-  local sign_label="pos${abs_angle}"
-  if [[ "$angle" == -* ]]; then
-    sign_label="neg${abs_angle}"
-  fi
-
-  local move_time=10
-  local return_time=10
-  local duration=26
-
-  if [[ "$abs_angle" == "5" ]]; then
-    move_time=8
-    return_time=8
-    duration=22
-  elif [[ "$abs_angle" == "10" ]]; then
-    move_time=10
-    return_time=10
-    duration=26
-  elif [[ "$abs_angle" == "30" ]]; then
-    move_time=15
-    return_time=15
-    duration=38
-  else
-    echo "Only use 5, 10, or 30 deg for this helper."
-    return 1
-  fi
-
-  local log="logs/real_j${joint}_${sign_label}deg_tuned_computed_pid.csv"
-
-  echo
-  echo "============================================================"
-  echo "REAL Z1 manual joint test with Gazebo-tuned parameters"
-  echo "joint=${joint}, angle=${angle} deg"
-  echo "move_time=${move_time}, return_time=${return_time}, duration=${duration}"
-  echo "log=${log}"
-  echo "STOP if wrong direction, vibration, sagging, or unexpected motion."
-  echo "============================================================"
-  read -p "Press Enter to start this single test, or Ctrl+C to abort..."
-
-  python3 torque_main.py \
-    --mode one_joint_relative \
-    --joint "$joint" \
-    --angle-deg "$angle" \
-    --trajectory-profile scurve \
-    --move-time "$move_time" \
-    --hold-time 3 \
-    --return-to-start \
-    --return-time "$return_time" \
-    --duration "$duration" \
-    --test-controller computed_pid_friction_model \
-    --return-controller computed_pid_friction_model \
-    --kp "64 100 100 60 64 100" \
-    --kd "13 16 16 14 13 16" \
-    --ki "0 0 0 20 0 0" \
-    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-    --model-damping "1 2 1 1 1 1" \
-    --model-friction "1 2 1 1.5 1 1.5" \
-    --tau-limit "5 8 10 10 3 3" \
-    --dynamics-mode analytic \
-    --csv-log "$log"
-}
-```
-
-## C2. Manual test order
-
-Run one line at a time. Run `prehome ...` between tests only if the arm does not return cleanly or before starting a new important group.
-
-### J1
-
-```bash
-run_joint 1 5
-run_joint 1 10
-run_joint 1 30
-run_joint 1 -5
-run_joint 1 -10
-run_joint 1 -30
-```
-
-### J2
-
-Use positive direction first.
-
-```bash
-run_joint 2 5
-run_joint 2 10
-run_joint 2 30
-```
-
-### J3
-
-Use negative direction first.
-
-```bash
-run_joint 3 -5
-run_joint 3 -10
-run_joint 3 -30
-```
-
-### J4
-
-Use negative direction first. Positive J4 was the known difficult direction in simulation, so do positive J4 only if you still have time and the negative side is stable.
-
-```bash
-run_joint 4 -5
-run_joint 4 -10
-run_joint 4 -30
-```
-
-Optional J4 positive last:
-
-```bash
-run_joint 4 5
-run_joint 4 10
-run_joint 4 30
-```
-
-### J5
-
-```bash
-run_joint 5 5
-run_joint 5 10
-run_joint 5 30
-run_joint 5 -5
-run_joint 5 -10
-run_joint 5 -30
-```
-
-### J6
-
-```bash
-run_joint 6 5
-run_joint 6 10
-run_joint 6 30
-run_joint 6 -5
-run_joint 6 -10
-run_joint 6 -30
-```
-
----
-
-# Part D: manual forward-pose tests from 25% to 100%
-
-Only run this if the manual J1-J6 joint tests are stable.
-
-Run `prehome before_forward_pose` first.
-
-Full target:
+The latest good result with friction2 = 2.5 had approximately:
 
 ```text
-[0, 1.5, -1.0, -0.54, 0, 0]
+J2 max tracking error ≈ 0.087 rad = 5.0 deg
+J2 final error        ≈ 0.053 rad = 3.0 deg
+J3 max tracking error ≈ 0.055 rad = 3.2 deg
+J3 final error        ≈ 0.0008 rad
+max tau2              ≈ 11.05 Nm under 12 Nm limit
+max tau3              ≈ 10.07 Nm under 12 Nm limit
+loop rate             ≈ 349 Hz
 ```
 
-Use these scaled targets:
+This is the current best real-arm CPID-friction result for:
 
 ```text
-25%  = [0, 0.375, -0.25, -0.135, 0, 0]
-50%  = [0, 0.750, -0.50, -0.270, 0, 0]
-75%  = [0, 1.125, -0.75, -0.405, 0, 0]
-100% = [0, 1.500, -1.00, -0.540, 0, 0]
-```
-
-## D1. Paste this helper once
-
-```bash
-cd /home/icesword/Desktop/torque_control/z1_project
-
-run_forward() {
-  local scale_label="$1"
-  local target="$2"
-  local move_time="$3"
-  local return_time="$4"
-  local duration="$5"
-  local log="logs/real_forward_pose_${scale_label}_tuned_computed_pid.csv"
-
-  echo
-  echo "============================================================"
-  echo "REAL Z1 manual forward-pose test with Gazebo-tuned parameters"
-  echo "scale=${scale_label}"
-  echo "target=${target}"
-  echo "log=${log}"
-  echo "STOP if wrong direction, vibration, sagging, or unexpected motion."
-  echo "============================================================"
-  read -p "Press Enter to start this forward-pose test, or Ctrl+C to abort..."
-
-  python3 torque_main.py \
-    --mode full_pose_absolute \
-    --target "$target" \
-    --trajectory-profile scurve \
-    --move-time "$move_time" \
-    --hold-time 3 \
-    --return-to-start \
-    --return-time "$return_time" \
-    --duration "$duration" \
-    --test-controller computed_pid_friction_model \
-    --return-controller computed_pid_friction_model \
-    --kp "64 100 100 60 64 100" \
-    --kd "13 16 16 14 13 16" \
-    --ki "0 0 0 20 0 0" \
-    --integral-limit "0.8 0.8 0.8 0.8 0.8 0.8" \
-    --model-damping "1 2 1 1 1 1" \
-    --model-friction "1 2 1 1.5 1 1.5" \
-    --tau-limit "5 8 10 10 3 3" \
-    --dynamics-mode analytic \
-    --csv-log "$log"
-}
-```
-
-## D2. Run forward pose by hand
-
-Run one line at a time. Run `prehome before_forward_pose` before this group, and optionally between scale tests if the arm does not return cleanly.
-
-```bash
-run_forward 25pct  "0 0.375 -0.25 -0.135 0 0" 20 20 48
-run_forward 50pct  "0 0.75 -0.50 -0.270 0 0" 20 20 48
-run_forward 75pct  "0 1.125 -0.75 -0.405 0 0" 20 20 48
-run_forward 100pct "0 1.5 -1.0 -0.54 0 0" 25 25 58
+J2 +90 deg, J3 -90 deg, 5 s move, 3 s hold, 5 s return
 ```
 
 ---
@@ -519,6 +292,7 @@ Stop immediately if any of these happen:
 
 - wrong joint moves
 - correct joint moves in wrong direction
+- physical contact or ground contact
 - vibration
 - arm sagging or falling
 - gripper behaves unexpectedly
